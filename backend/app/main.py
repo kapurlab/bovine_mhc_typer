@@ -895,10 +895,14 @@ def api_get_config():
 
 
 class ConfigPayload(BaseModel):
-    kraken_db: Optional[str] = None
-    amrfinder_db: Optional[str] = None
     projects_root: Optional[str] = None
     shared_projects_root: Optional[str] = None
+    runs_root: Optional[str] = None
+    bola_refs: Optional[str] = None
+    ont_env_bin: Optional[str] = None
+    phase_env_bin: Optional[str] = None
+    medaka_model: Optional[str] = None
+    enable_class_i: Optional[bool] = None
 
 
 @app.post("/api/config")
@@ -942,106 +946,101 @@ def api_browse_dirs(path: str = ""):
 
 class RunPayload(BaseModel):
     project: str
-    r1: str                       # absolute path to R1 FASTQ or an assembly FASTA
-    r2: Optional[str] = None
-    assembly: Optional[str] = None   # provide an assembly FASTA directly (skip assembly)
-    force_organism: Optional[str] = None
-    use_plus: bool = True
-    run_kraken: bool = True
-    run_mlst: bool = True
+    run_dir: str                 # absolute path to the run folder (barcodeNN/ subdirs)
+    barcodes: List[str]          # "barcodeNN:sample_id" (sample optional)
+    amplicon: str = "drb3"       # v1: drb3 (Class II). Class I is gated behind config.
     threads: Optional[int] = None
-    ident_min: Optional[float] = None
-    coverage_min: Optional[float] = None
-    kraken_db: Optional[str] = None
-    amrfinder_db: Optional[str] = None
 
 
 @app.post("/api/run")
 def api_run(payload: RunPayload):
     cfg = load_config()
-    kraken_db = payload.kraken_db or cfg.get("kraken_db", "")
-    amrfinder_db = payload.amrfinder_db or cfg.get("amrfinder_db", "")
-
     project_dir = _get_project_dir(payload.project)
     if project_dir is None:
         raise HTTPException(404, f"Project not found: {payload.project}")
 
-    # The "primary" input file is r1 — either FASTQ reads or an assembly FASTA.
-    primary = Path(payload.r1)
-    if not primary.exists():
-        raise HTTPException(400, f"Input file not found: {payload.r1}")
+    run_src = Path(payload.run_dir)
+    if not run_src.is_dir():
+        raise HTTPException(400, f"Run folder not found: {payload.run_dir}")
+    if not payload.barcodes:
+        raise HTTPException(400, "No barcodes selected")
 
-    # Derive sample name — strip _R1/_R2 or _1/_2 read tags; for an assembly
-    # FASTA, drop the fasta suffix.
-    if primary.name.lower().endswith((".fasta", ".fa", ".fna")):
-        sample_name = re.sub(r"\.(fasta|fa|fna)$", "", primary.name, flags=re.IGNORECASE)
-    else:
-        sample_name, _ = _strip_read_tag(primary.name)
+    amplicon = (payload.amplicon or "drb3").strip()
+    if amplicon != "drb3" and not cfg.get("enable_class_i", False):
+        raise HTTPException(
+            400,
+            "Class I is disabled (provisional). Enable it in Settings to run non-DRB3 amplicons.",
+        )
 
-    run_dir = project_dir / "amr" / sample_name
+    run_tag = run_src.name.replace(" ", "_")
+    out_dir = project_dir / "mhc" / f"{run_tag}__{amplicon}"
 
     # Refuse to start a second pipeline in the same output directory (race).
     for existing in job_manager.list_jobs():
-        if existing.get("status") == "running" and existing.get("cwd") == str(run_dir):
+        if existing.get("status") == "running" and existing.get("cwd") == str(out_dir):
             raise HTTPException(
                 409,
-                f"A run is already in progress for {sample_name} "
+                f"A {amplicon} run is already in progress for {run_tag} "
                 f"(job {existing['id'][:8]}). Wait for it to finish before re-running.",
             )
 
-    run_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    script = _BIN_DIR / "amr_pipeline.py"
+    script = _BIN_DIR / "run_typing.py"
     command = [sys.executable, "-u", str(script),
-               "--sample", sample_name,
-               "--outdir", str(run_dir)]
-
-    # Reads vs. assembly input.
-    if payload.assembly:
-        asm = Path(payload.assembly)
-        if not asm.exists():
-            raise HTTPException(400, f"Assembly FASTA not found: {payload.assembly}")
-        command.extend(["--assembly", str(asm)])
-    elif primary.name.lower().endswith((".fasta", ".fa", ".fna")):
-        command.extend(["--assembly", str(primary)])
-    else:
-        command.extend(["-r1", str(primary)])
-        if payload.r2:
-            r2 = Path(payload.r2)
-            if not r2.exists():
-                raise HTTPException(400, f"R2 file not found: {payload.r2}")
-            command.extend(["-r2", str(r2)])
-
-    if payload.force_organism:
-        command.extend(["--force-organism", payload.force_organism.strip()])
-    if payload.use_plus:
-        command.append("--plus")
-    if not payload.run_kraken:
-        command.append("--no-kraken")
-    if not payload.run_mlst:
-        command.append("--no-mlst")
-    if kraken_db:
-        command.extend(["--kraken-db", kraken_db])
-    if amrfinder_db:
-        command.extend(["--amrfinder-db", amrfinder_db])
+               "--run-dir", str(run_src),
+               "--outdir", str(out_dir),
+               "--amplicon", amplicon,
+               "--barcodes", *payload.barcodes]
     if payload.threads:
         command.extend(["--threads", str(int(payload.threads))])
-    if payload.ident_min is not None:
-        command.extend(["--ident-min", str(payload.ident_min)])
-    if payload.coverage_min is not None:
-        command.extend(["--coverage-min", str(payload.coverage_min)])
 
+    # Hand the pipeline its runtime paths from the per-user config (mhc_config
+    # reads these MHC_* env vars). PATH gets the tool env bins so bioconda tools
+    # resolve their own interpreters/libs (see BUILDING_A_SIBLING_TOOL §11.1).
+    ont_bin = cfg.get("ont_env_bin", "")
+    phase_bin = cfg.get("phase_env_bin", "")
     env = {
         "PYTHONPATH": str(_BIN_DIR),
-        "PATH": os.environ.get("PATH", ""),
+        "PATH": ":".join(p for p in [ont_bin, phase_bin, os.environ.get("PATH", "")] if p),
         "PYTHONUNBUFFERED": "1",
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "MHC_ONT_BIN": ont_bin,
+        "MHC_PHASE_BIN": phase_bin,
+        "MHC_REFS": cfg.get("bola_refs", ""),
+        "MHC_MEDAKA_MODEL": cfg.get("medaka_model", ""),
     }
 
-    org_label = payload.force_organism or "auto-detect organism"
-    job_name = f"{payload.project}/{sample_name} — AMRFinderPlus ({org_label})"
-    job_id = job_manager.start_job(name=job_name, command=command, cwd=run_dir, env=env)
-    return JSONResponse({"job_id": job_id, "run_dir": str(run_dir)})
+    job_name = (f"{payload.project}/{run_tag} — MHC Typer "
+                f"({amplicon.upper()}, {len(payload.barcodes)} barcodes)")
+    job_id = job_manager.start_job(name=job_name, command=command, cwd=out_dir, env=env)
+    return JSONResponse({"job_id": job_id, "run_dir": str(out_dir)})
+
+
+@app.get("/api/runs")
+def api_runs():
+    """List available ONT run folders (barcodeNN/ subdirs of *.fastq.gz) under
+    the configured runs_root, each with its barcode list — the 'link an existing
+    run' input model."""
+    cfg = load_config()
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for root in [cfg.get("runs_root", ""), cfg.get("shared_projects_root", "")]:
+        if not root or not Path(root).is_dir():
+            continue
+        for d in sorted(Path(root).iterdir()):
+            if not d.is_dir() or str(d) in seen:
+                continue
+            try:
+                bcs = sorted(p.name for p in d.iterdir()
+                             if p.is_dir() and p.name.lower().startswith("barcode"))
+            except PermissionError:
+                continue
+            if not bcs:
+                continue
+            seen.add(str(d))
+            out.append({"name": d.name, "path": str(d), "barcodes": bcs})
+    return JSONResponse(out)
 
 
 @app.get("/api/jobs")
@@ -1140,50 +1139,41 @@ def _result_category(rel: str) -> Optional[str]:
 
     if any(part.startswith(".") for part in parts):
         return None
-    if name.endswith(".fastq.gz"):
+    if name.endswith(".fastq.gz") or name.endswith(".fa") or name.endswith(".fq.gz"):
         return None
 
+    if name == "per_animal_report.html":
+        return "report_html"
     if name == "report.pdf":
         return "report_pdf"
+    if name == "per_animal_report.txt":
+        return "report_txt"
+    if name == "drb3_typed.tsv":
+        return "drb3_typed"
+    if name in ("per_animal_reconciled.tsv", "reconciled_alleles.tsv"):
+        return "reconciled"
+    if name == "per_animal_haplotypes.tsv":
+        return "haplotypes"
+    if name in ("classI_typed.tsv", "bosex_typed.tsv", "utr_typed.tsv") or name.endswith("_typed.tsv"):
+        return "classI_typed"
     if name.endswith("_stats.xlsx"):
         return "stats_xlsx"
-    if name == "fastq_qc.json":
-        return "fastq_qc"
-    if name == "amrfinder.tsv":
-        return "amrfinder_tsv"
-    if name == "mutation_all.tsv":
-        return "mutation_all"
-    if name == "organism_detection.json":
-        return "organism_detection"
-    if name == "qc.json":
-        return "qc"
     if name == "run_manifest.json":
         return "run_manifest"
-    if name in ("mlst_result.json", "mlst.tsv"):
-        return "mlst"
-    if name == "assembly.fasta" or name.endswith("_assembly.fasta"):
-        return "assembly_fasta"
-    if name.endswith("_krona.html") or name == "krona.html":
-        return "krona"
-    if name.endswith("_kraken_report.txt") or name == "kraken_report.txt":
-        return "kraken_report"
     if name == "pipeline.log":
         return "log"
     return None
 
 
 _CATEGORY_ORDER = {
-    "report_pdf": 0,
-    "stats_xlsx": 1,
-    "amrfinder_tsv": 2,
-    "mutation_all": 3,
-    "organism_detection": 4,
-    "qc": 5,
-    "fastq_qc": 6,
-    "mlst": 7,
-    "assembly_fasta": 8,
-    "krona": 9,
-    "kraken_report": 10,
+    "report_html": 0,
+    "report_pdf": 1,
+    "report_txt": 2,
+    "drb3_typed": 3,
+    "reconciled": 4,
+    "haplotypes": 5,
+    "classI_typed": 6,
+    "stats_xlsx": 7,
     "run_manifest": 11,
     "log": 99,
 }
@@ -1191,20 +1181,41 @@ _CATEGORY_ORDER = {
 
 def _result_label(rel: str, category: Optional[str]) -> str:
     return {
-        "report_pdf": "Report (PDF)",
+        "report_html": "Per-animal report (HTML)",
+        "report_pdf": "Per-animal report (PDF)",
+        "report_txt": "Per-animal report (text)",
+        "drb3_typed": "DRB3 (Class II) genotypes (TSV)",
+        "reconciled": "Reconciled alleles (TSV)",
+        "haplotypes": "MHC-I haplotypes (TSV)",
+        "classI_typed": "Class I per-amplicon calls — PROVISIONAL (TSV)",
         "stats_xlsx": "Statistics workbook (Excel)",
-        "amrfinder_tsv": "AMRFinderPlus results (TSV)",
-        "mutation_all": "All assessed mutations (TSV)",
-        "organism_detection": "Organism detection (JSON)",
-        "qc": "Assembly QC (JSON)",
-        "fastq_qc": "Input read QC (JSON)",
-        "mlst": "MLST result",
-        "assembly_fasta": "Assembly FASTA",
-        "krona": "Krona taxonomy report",
-        "kraken_report": "Kraken2 report",
         "run_manifest": "Run manifest / provenance (JSON)",
         "log": "Pipeline log",
     }.get(category, rel)
+
+
+@app.get("/api/jobs/{job_id}/logtext")
+def api_job_logtext(job_id: str):
+    """Plain (non-streaming) log + status — POLLED by the UI instead of SSE.
+    OOD's /rnode Apache reverse proxy buffers/garbles SSE, so a single proxy-safe
+    GET returning both status and the log file is the reliable pattern here."""
+    job = job_manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    text = ""
+    lp = job.get("log_path")
+    try:
+        if lp and Path(lp).is_file():
+            text = Path(lp).read_text(encoding="utf-8", errors="replace")
+            if len(text) > 40000:
+                text = "...(earlier log truncated)...\n" + text[-40000:]
+    except OSError:
+        pass
+    return JSONResponse({
+        "status": job.get("status"),
+        "exit_code": job.get("exit_code"),
+        "log": text,
+    })
 
 
 @app.get("/api/jobs/{job_id}/results")
