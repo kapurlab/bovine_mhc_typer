@@ -898,6 +898,7 @@ class ConfigPayload(BaseModel):
     projects_root: Optional[str] = None
     shared_projects_root: Optional[str] = None
     runs_root: Optional[str] = None
+    barcode_map: Optional[str] = None
     bola_refs: Optional[str] = None
     ont_env_bin: Optional[str] = None
     phase_env_bin: Optional[str] = None
@@ -1017,12 +1018,40 @@ def api_run(payload: RunPayload):
     return JSONResponse({"job_id": job_id, "run_dir": str(out_dir)})
 
 
+def _barcode_map(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """Parse barcode_sample_map.tsv into {run_folder: {barcode: {sample, tissue}}}
+    so the GUI can show animal IDs instead of bare barcodes."""
+    path = cfg.get("barcode_map", "")
+    out: Dict[str, Dict[str, Dict[str, str]]] = {}
+    if not path or not Path(path).is_file():
+        return out
+    try:
+        with open(path, encoding="utf-8") as fh:
+            header = fh.readline().rstrip("\n").split("\t")
+            idx = {name: i for i, name in enumerate(header)}
+            rf, bc, sid, tis = (idx.get("run_folder"), idx.get("barcode"),
+                                idx.get("sample_id"), idx.get("tissue"))
+            if rf is None or bc is None or sid is None:
+                return out
+            for line in fh:
+                f = line.rstrip("\n").split("\t")
+                if len(f) <= max(rf, bc, sid):
+                    continue
+                out.setdefault(f[rf], {}).setdefault(f[bc], {
+                    "sample": f[sid],
+                    "tissue": f[tis] if tis is not None and len(f) > tis else "",
+                })
+    except OSError:
+        pass
+    return out
+
+
 @app.get("/api/runs")
 def api_runs():
-    """List available ONT run folders (barcodeNN/ subdirs of *.fastq.gz) under
-    the configured runs_root, each with its barcode list — the 'link an existing
-    run' input model."""
+    """List ONT run folders (barcodeNN/ subdirs) under the configured runs_root,
+    each with its barcodes annotated with the animal/sample ID from the map."""
     cfg = load_config()
+    bmap = _barcode_map(cfg)
     out: List[Dict[str, Any]] = []
     seen = set()
     for root in [cfg.get("runs_root", ""), cfg.get("shared_projects_root", "")]:
@@ -1032,15 +1061,94 @@ def api_runs():
             if not d.is_dir() or str(d) in seen:
                 continue
             try:
-                bcs = sorted(p.name for p in d.iterdir()
-                             if p.is_dir() and p.name.lower().startswith("barcode"))
+                names = sorted(p.name for p in d.iterdir()
+                               if p.is_dir() and p.name.lower().startswith("barcode"))
             except PermissionError:
                 continue
-            if not bcs:
+            if not names:
                 continue
             seen.add(str(d))
-            out.append({"name": d.name, "path": str(d), "barcodes": bcs})
+            run_map = bmap.get(d.name, {})
+            barcodes = [{"barcode": b,
+                         "sample": run_map.get(b, {}).get("sample", ""),
+                         "tissue": run_map.get(b, {}).get("tissue", "")}
+                        for b in names]
+            out.append({"name": d.name, "path": str(d), "barcodes": barcodes})
     return JSONResponse(out)
+
+
+def _drb3_qc(c1: int, c2: int, zyg: str) -> str:
+    """vSNP-style pass / review / fail for a DRB3 call, from allele read support.
+    DRB3 is single-copy: a clean het has two well-supported alleles, a clean hom
+    one. Thin/absent primary support fails; thin secondary or low depth reviews."""
+    if not zyg or zyg in ("none", "MISSING", "NO_READS", "ERROR") or c1 < 20:
+        return "fail"
+    if c1 < 100 or (zyg == "het" and c2 < 50):
+        return "review"
+    return "pass"
+
+
+def _parse_allele(field: str):
+    """'BoLA-DRB3*167:01:12' -> ('BoLA-DRB3*167:01', 12). The allele name itself
+    contains colons, so split the trailing count off the right."""
+    field = (field or "").strip()
+    if not field:
+        return "", 0
+    allele, _, count = field.rpartition(":")
+    if not allele:
+        return count, 0
+    try:
+        return allele, int(count)
+    except ValueError:
+        return field, 0
+
+
+@app.get("/api/jobs/{job_id}/table")
+def api_job_table(job_id: str):
+    """Parse the run's drb3_typed.tsv into a per-animal genotype + QC table."""
+    job = job_manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    cwd = Path(job.get("cwd", ""))
+    tsv = cwd / "drb3_typed.tsv"
+    if not tsv.is_file():
+        return JSONResponse({"rows": [], "summary": {"pass": 0, "review": 0, "fail": 0, "total": 0}})
+
+    # animal IDs: resolve the run folder from the manifest, then the map
+    cfg = load_config()
+    run_folder = ""
+    try:
+        manifest = json.loads((cwd / "run_manifest.json").read_text(encoding="utf-8"))
+        run_folder = Path(manifest.get("run_dir", "")).name
+    except (OSError, json.JSONDecodeError):
+        pass
+    run_map = _barcode_map(cfg).get(run_folder, {})
+
+    rows = []
+    summary = {"pass": 0, "review": 0, "fail": 0, "total": 0}
+    for line in tsv.read_text(encoding="utf-8").splitlines()[1:]:
+        f = line.split("\t")
+        if len(f) < 6:
+            continue
+        bc, _sample, n_reads = f[0], f[1], f[2]
+        a1, c1 = _parse_allele(f[3])
+        a2, c2 = _parse_allele(f[4])
+        zyg = f[5]
+        qc = _drb3_qc(c1, c2, zyg)
+        summary[qc] = summary.get(qc, 0) + 1
+        summary["total"] += 1
+        rows.append({
+            "barcode": bc,
+            "animal": run_map.get(bc, {}).get("sample", "") or _sample,
+            "tissue": run_map.get(bc, {}).get("tissue", ""),
+            "allele1": a1, "count1": c1,
+            "allele2": a2, "count2": c2,
+            "zygosity": zyg,
+            "reads": int(n_reads) if n_reads.isdigit() else 0,
+            "qc": qc,
+        })
+    rows.sort(key=lambda r: (r["barcode"]))
+    return JSONResponse({"rows": rows, "summary": summary})
 
 
 @app.get("/api/jobs")

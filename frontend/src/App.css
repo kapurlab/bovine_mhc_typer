@@ -424,3 +424,20 @@ button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20p
   .app-header { flex-direction: column; align-items: flex-start; }
   .app { padding: 18px; }
 }
+
+/* ── MHC Typer: per-animal genotype QC table ──────────────────── */
+.geno-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.geno-table th {
+  text-align: left; font-weight: 600; color: var(--muted, #6b7280);
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 6px 10px; border-bottom: 1px solid rgba(0,0,0,0.10);
+}
+.geno-table td { padding: 7px 10px; border-bottom: 1px solid rgba(0,0,0,0.05); vertical-align: middle; }
+.geno-table tbody tr:hover { background: rgba(76,140,138,0.05); }
+.qc-badge {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.qc-pass   { background: #e6f2ea; color: #2f7d4f; }
+.qc-review { background: #fbf0d9; color: #a9741f; }
+.qc-fail   { background: #f7e3db; color: #b04a29; }

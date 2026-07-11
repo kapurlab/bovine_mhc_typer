@@ -56,6 +56,9 @@ DEFAULTS: Dict[str, Any] = {
     # Where run folders of barcoded ONT FASTQ live (rclone-synced). Users can
     # also point the app at a project's own download/ dir.
     "runs_root": _first_existing("/home/vxk1/BoLA_MHC/data", str(Path.home() / "BoLA_MHC" / "data")),
+    # barcode -> animal/sample map (run_date, run_folder, amplicon, barcode,
+    # sample_id, lab_id, tissue, ...). Lets the GUI show animal IDs, not barcodes.
+    "barcode_map": _first_existing("/home/vxk1/BoLA_MHC/barcode_sample_map.tsv", ""),
     "bola_refs": _BOLA_REFS_DEFAULT,
     "ont_env_bin": _ONT_ENV_BIN_DEFAULT,
     "phase_env_bin": _PHASE_ENV_BIN_DEFAULT,
