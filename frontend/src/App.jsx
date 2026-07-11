@@ -69,7 +69,11 @@ export default function App() {
 
   function pickRun(path) {
     setRunPath(path);
-    const bcs = runs.find((x) => x.path === path)?.barcodes || [];
+    // Tolerate both the new backend ({barcode,sample,tissue}) and an old one
+    // (plain "barcodeNN" strings) so a stale session degrades gracefully
+    // instead of sending undefined:undefined.
+    const raw = runs.find((x) => x.path === path)?.barcodes || [];
+    const bcs = raw.map((b) => (typeof b === "string" ? { barcode: b, sample: "", tissue: "" } : b));
     setBarcodes(bcs);
     setSelected(Object.fromEntries(bcs.map((b) => [b.barcode, true])));
     setTable(null); setResults([]);
@@ -189,7 +193,7 @@ export default function App() {
             </div>
 
             <div className="input-column">
-              <div className="panel-header"><h3>Run &amp; animals</h3></div>
+              <div className="panel-header"><h3>Run &amp; samples</h3></div>
               <select value={runPath} onChange={(e) => pickRun(e.target.value)}>
                 <option value="">— select a run folder —</option>
                 {runs.map((r) => <option key={r.path} value={r.path}>{r.name} ({r.barcodes.length})</option>)}
@@ -199,21 +203,21 @@ export default function App() {
                   <label className="checkbox-label" style={{ marginTop: 8 }}>
                     <input type="checkbox" checked={allOn}
                            onChange={(e) => setSelected(Object.fromEntries(barcodes.map((b) => [b.barcode, e.target.checked])))} />
-                    Select all ({chosen.length}/{barcodes.length} animals)
+                    Select all ({chosen.length}/{barcodes.length} samples)
                   </label>
-                  <div className="sample-list">
+                  <div className="sample-list" style={{ maxHeight: 300, overflowY: "auto" }}>
                     {barcodes.map((b) => (
                       <label key={b.barcode} className="checkbox-label sample-item">
                         <input type="checkbox" checked={!!selected[b.barcode]} onChange={(e) => setSelected((s) => ({ ...s, [b.barcode]: e.target.checked }))} />
                         <span className="sample-name">{b.sample || b.barcode}</span>
-                        {b.sample ? <span className="muted"> · {b.barcode}</span> : null}
+                        <span className="muted"> · {b.barcode}</span>
                         {b.tissue ? <span className="read-badge">{b.tissue}</span> : null}
                       </label>
                     ))}
                   </div>
                 </>
               )}
-              {!barcodes.length && <p className="empty-msg">Pick a run to list its animals.</p>}
+              {!barcodes.length && <p className="empty-msg">Pick a run to list its samples.</p>}
             </div>
           </div>
         </div>
@@ -242,8 +246,8 @@ export default function App() {
                 <div className="sel-title">Current run</div>
                 {job
                   ? <><div className="sel-row"><span className="sel-name">{runName} · {amplicon.toUpperCase()}</span></div>
-                       <div className="note">{chosen.length} animals · job {job.id.slice(0, 8)} · {statusText}</div></>
-                  : <p className="empty-msg">Select animals, set the amplicon, and Run.</p>}
+                       <div className="note">{chosen.length} samples · job {job.id.slice(0, 8)} · {statusText}</div></>
+                  : <p className="empty-msg">Select samples, set the amplicon, and Run.</p>}
               </div>
             </div>
           </div>
@@ -255,12 +259,12 @@ export default function App() {
           {table && table.rows?.length ? (
             <>
               <div className="note" style={{ marginBottom: 8 }}>
-                {sum.total} animals · <b style={{ color: "#2f7d4f" }}>{sum.pass} pass</b> · <b style={{ color: "#a9741f" }}>{sum.review} review</b> · <b style={{ color: "#b04a29" }}>{sum.fail} fail</b>
+                {sum.total} samples · <b style={{ color: "#2f7d4f" }}>{sum.pass} pass</b> · <b style={{ color: "#a9741f" }}>{sum.review} review</b> · <b style={{ color: "#b04a29" }}>{sum.fail} fail</b>
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table className="geno-table">
                   <thead>
-                    <tr><th>Animal</th><th>Barcode</th><th>DRB3 allele 1</th><th>DRB3 allele 2</th><th>Zyg.</th><th>Reads a1/a2</th><th>QC</th></tr>
+                    <tr><th>Sample</th><th>Barcode</th><th>DRB3 allele 1</th><th>DRB3 allele 2</th><th>Zyg.</th><th>Reads a1/a2</th><th>QC</th></tr>
                   </thead>
                   <tbody>
                     {table.rows.map((r) => (
