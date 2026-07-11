@@ -17,10 +17,13 @@ import os
 import subprocess
 import collections
 import re
+import shlex
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mhc_config as C
+
+q = shlex.quote  # quote every path — run/output folders may contain spaces or [brackets]
 
 
 def sh(c):
@@ -37,20 +40,21 @@ def main():
     if not os.path.isdir(raw):
         print(f"{bc}\t{sample}\t0\t\t\tMISSING")
         return
-    sh(f"cat {raw}/*.fastq.gz > {wd}/m.fq.gz 2>/dev/null")
-    sh(f"nanoq -i {wd}/m.fq.gz -q 10 -l 400 --max-len 850 -o {wd}/f.fq.gz 2>/dev/null")
-    sh(f"zcat {wd}/f.fq.gz 2>/dev/null | head -40000 | "
-       f"awk 'NR%4==1{{print \">\"substr($1,2)}} NR%4==2{{print}}' > {wd}/reads.fa")
-    n = sum(1 for l in open(f"{wd}/reads.fa") if l.startswith(">")) if os.path.exists(f"{wd}/reads.fa") else 0
+    sh(f"cat {q(raw)}/*.fastq.gz > {q(wd)}/m.fq.gz 2>/dev/null")
+    sh(f"nanoq -i {q(wd)}/m.fq.gz -q 10 -l 400 --max-len 850 -o {q(wd)}/f.fq.gz 2>/dev/null")
+    sh(f"zcat {q(wd)}/f.fq.gz 2>/dev/null | head -40000 | "
+       f"awk 'NR%4==1{{print \">\"substr($1,2)}} NR%4==2{{print}}' > {q(wd)}/reads.fa")
+    reads_fa = os.path.join(wd, "reads.fa")
+    n = sum(1 for l in open(reads_fa) if l.startswith(">")) if os.path.exists(reads_fa) else 0
     if n == 0:
         print(f"{bc}\t{sample}\t0\t\t\tNO_READS")
         return
     db = C.REFS / "blast_db" / "BoLA_nuc"
-    sh(f"{C.BLASTN} -db {db} -query {wd}/reads.fa "
+    sh(f"{q(C.BLASTN)} -db {q(str(db))} -query {q(wd)}/reads.fa "
        f"-outfmt '6 qseqid pident qcovs stitle' -max_target_seqs 1 -word_size 7 "
-       f"-num_threads 4 2>/dev/null | sort -k1,1 -k2,2nr | awk '!s[$1]++' > {wd}/hits.tsv")
+       f"-num_threads 4 2>/dev/null | sort -k1,1 -k2,2nr | awk '!s[$1]++' > {q(wd)}/hits.tsv")
     cnt = collections.Counter()
-    for line in open(f"{wd}/hits.tsv"):
+    for line in open(os.path.join(wd, "hits.tsv")):
         f = line.rstrip().split("\t")
         if len(f) < 4:
             continue
