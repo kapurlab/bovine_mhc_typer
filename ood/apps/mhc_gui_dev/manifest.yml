@@ -1,0 +1,7 @@
+---
+name: MHC Typer (dev)
+description: "Bovine MHC (BoLA) genotyping from Oxford Nanopore amplicon reads — DRB3 (Class II) reliable, Class I provisional; per-animal allele calls with confidence tiers and haplotypes"
+icon: fa://dna
+category: Bioinformatics
+subcategory: Genotyping
+role: batch_connect
