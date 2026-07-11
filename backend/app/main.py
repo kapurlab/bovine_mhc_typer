@@ -1018,10 +1018,10 @@ def api_run(payload: RunPayload):
     return JSONResponse({"job_id": job_id, "run_dir": str(out_dir)})
 
 
-def _barcode_map(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, str]]]:
-    """Parse barcode_sample_map.tsv into {run_folder: {barcode: {sample, tissue}}}
-    so the GUI can show animal IDs instead of bare barcodes."""
-    path = cfg.get("barcode_map", "")
+def _parse_sheet(path: str) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """Parse a sample sheet TSV into {run_folder: {barcode: {sample, tissue, amplicon}}}.
+    Columns needed: run_folder, barcode, sample_id (+ optional tissue, amplicon).
+    Drives animal IDs in the picker and per-barcode amplicon auto-run."""
     out: Dict[str, Dict[str, Dict[str, str]]] = {}
     if not path or not Path(path).is_file():
         return out
@@ -1029,21 +1029,34 @@ def _barcode_map(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, str]]]:
         with open(path, encoding="utf-8") as fh:
             header = fh.readline().rstrip("\n").split("\t")
             idx = {name: i for i, name in enumerate(header)}
-            rf, bc, sid, tis = (idx.get("run_folder"), idx.get("barcode"),
-                                idx.get("sample_id"), idx.get("tissue"))
+            rf, bc, sid = idx.get("run_folder"), idx.get("barcode"), idx.get("sample_id")
+            tis, amp = idx.get("tissue"), idx.get("amplicon")
             if rf is None or bc is None or sid is None:
                 return out
             for line in fh:
                 f = line.rstrip("\n").split("\t")
                 if len(f) <= max(rf, bc, sid):
                     continue
+
+                def g(i):
+                    return f[i] if i is not None and len(f) > i else ""
+
                 out.setdefault(f[rf], {}).setdefault(f[bc], {
-                    "sample": f[sid],
-                    "tissue": f[tis] if tis is not None and len(f) > tis else "",
+                    "sample": f[sid], "tissue": g(tis), "amplicon": g(amp),
                 })
     except OSError:
         pass
     return out
+
+
+def _barcode_map(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """The site-wide sample map (config `barcode_map`)."""
+    return _parse_sheet(cfg.get("barcode_map", ""))
+
+
+def _project_sheet(project_dir: Path) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """A project's own uploaded sample sheet; falls back to the site map."""
+    return _parse_sheet(str(project_dir / "sample_sheet.tsv"))
 
 
 @app.get("/api/runs")
@@ -1074,6 +1087,108 @@ def api_runs():
                          "tissue": run_map.get(b, {}).get("tissue", "")}
                         for b in names]
             out.append({"name": d.name, "path": str(d), "barcodes": barcodes})
+    return JSONResponse(out)
+
+
+class LinkRunRequest(BaseModel):
+    source: str
+
+
+@app.post("/api/projects/{name}/link-run")
+def api_project_link_run(name: str, payload: LinkRunRequest):
+    """Link an existing ONT run folder (barcodeNN/ subdirs) into the project's
+    runs/ — a symlink, no copy."""
+    project_dir = _writable_project_dir(name)
+    src = Path((payload.source or "").strip()).expanduser()
+    if not src.is_dir():
+        raise HTTPException(400, f"Run folder not found: {src}")
+    try:
+        has_bc = any(p.is_dir() and p.name.lower().startswith("barcode") for p in src.iterdir())
+    except OSError:
+        has_bc = False
+    if not has_bc:
+        raise HTTPException(400, "That folder has no barcodeNN/ subdirs — not a run folder.")
+    runs_dir = project_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    target = runs_dir / src.name
+    if target.exists() or target.is_symlink():
+        raise HTTPException(409, f"Run already linked: {src.name}")
+    target.symlink_to(src.resolve())
+    return JSONResponse({"linked": src.name})
+
+
+@app.post("/api/projects/{name}/sample-sheet")
+async def api_project_sample_sheet(name: str, file: UploadFile = File(...)):
+    """Upload the project's sample sheet (barcode -> sample_id -> tissue -> amplicon)."""
+    project_dir = _writable_project_dir(name)
+    dest = project_dir / "sample_sheet.tsv"
+    async with aiofiles.open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            await out.write(chunk)
+    parsed = _parse_sheet(str(dest))
+    return JSONResponse({"saved": True, "run_folders": list(parsed.keys()),
+                         "barcodes": sum(len(v) for v in parsed.values())})
+
+
+@app.get("/api/projects/{name}/inputs-status")
+def api_project_inputs_status(name: str):
+    """What's loaded into a project: linked run folders + sample-sheet status."""
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    runs_dir = project_dir / "runs"
+    runs = []
+    if runs_dir.is_dir():
+        for d in sorted(runs_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                nbc = sum(1 for p in d.iterdir() if p.is_dir() and p.name.lower().startswith("barcode"))
+            except OSError:
+                nbc = 0
+            runs.append({"name": d.name, "barcodes": nbc})
+    parsed = _project_sheet(project_dir)
+    return JSONResponse({
+        "runs": runs,
+        "sheet": {"present": (project_dir / "sample_sheet.tsv").is_file(),
+                  "run_folders": list(parsed.keys()),
+                  "barcodes": sum(len(v) for v in parsed.values())},
+    })
+
+
+@app.get("/api/projects/{name}/runs")
+def api_project_runs(name: str):
+    """The project's linked runs, barcodes annotated from the project sheet
+    (falling back to the site-wide map)."""
+    cfg = load_config()
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    sheet = _project_sheet(project_dir)
+    site = _barcode_map(cfg)
+    runs_dir = project_dir / "runs"
+    out = []
+    if runs_dir.is_dir():
+        for d in sorted(runs_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                names = sorted(p.name for p in d.iterdir()
+                               if p.is_dir() and p.name.lower().startswith("barcode"))
+            except OSError:
+                continue
+            if not names:
+                continue
+            rmap = sheet.get(d.name) or site.get(d.name) or {}
+            barcodes = [{"barcode": b,
+                         "sample": rmap.get(b, {}).get("sample", ""),
+                         "tissue": rmap.get(b, {}).get("tissue", ""),
+                         "amplicon": rmap.get(b, {}).get("amplicon", "")}
+                        for b in names]
+            out.append({"name": d.name, "path": str(d.resolve()), "barcodes": barcodes})
     return JSONResponse(out)
 
 
