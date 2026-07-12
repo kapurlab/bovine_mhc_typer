@@ -987,12 +987,28 @@ def api_run(payload: RunPayload):
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build a manifest (barcode, sample, reads_source) so no path — which may
+    # contain spaces or [brackets] — ever hits the command line. reads_source is
+    # the barcode DIRECTORY (linked ONT run) or a single FASTQ FILE (uploaded).
+    rows = []
+    for entry in payload.barcodes:
+        bc, _, sample = entry.partition(":")
+        src = run_src / bc
+        if src.is_dir():
+            reads = str(src)
+        else:
+            m = sorted(run_src.glob(f"{bc}*.fastq.gz"))
+            reads = str(m[0]) if m else str(src)
+        rows.append(f"{bc}\t{sample or bc}\t{reads}")
+    manifest_path = out_dir / "manifest.tsv"
+    manifest_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
     script = _BIN_DIR / "run_typing.py"
     command = [sys.executable, "-u", str(script),
-               "--run-dir", str(run_src),
+               "--manifest", str(manifest_path),
                "--outdir", str(out_dir),
                "--amplicon", amplicon,
-               "--barcodes", *payload.barcodes]
+               "--run-folder", run_src.name]
     if payload.threads:
         command.extend(["--threads", str(int(payload.threads))])
 
@@ -1189,7 +1205,39 @@ def api_project_runs(name: str):
                          "amplicon": rmap.get(b, {}).get("amplicon", "")}
                         for b in names]
             out.append({"name": d.name, "path": str(d.resolve()), "barcodes": barcodes})
+
+    # Uploaded reads: each FASTQ in download/ is treated as one sample.
+    dl = project_dir / "download"
+    if dl.is_dir():
+        stems = sorted({re.sub(r"_R?[12](_\d+)?$", "",
+                               re.sub(r"\.(fastq|fq)\.gz$", "", f.name, flags=re.IGNORECASE))
+                        for f in dl.glob("*.fastq.gz")})
+        if stems:
+            out.append({"name": "Uploaded reads", "path": str(dl),
+                        "barcodes": [{"barcode": s, "sample": s, "tissue": "", "amplicon": ""}
+                                     for s in stems]})
     return JSONResponse(out)
+
+
+_EXAMPLE_SHEETS = _REPO_ROOT / "examples" / "sample_sheets"
+
+
+@app.get("/api/example-sheets")
+def api_example_sheets():
+    """List the per-run example sample sheets + the blank template."""
+    out = []
+    if _EXAMPLE_SHEETS.is_dir():
+        for f in sorted(_EXAMPLE_SHEETS.glob("*.tsv")):
+            out.append({"name": f.name, "template": f.name.startswith("TEMPLATE")})
+    return JSONResponse(out)
+
+
+@app.get("/api/example-sheets/{filename}")
+def api_example_sheet(filename: str):
+    f = _EXAMPLE_SHEETS / Path(filename).name
+    if not f.is_file():
+        raise HTTPException(404, "Example sheet not found")
+    return FileResponse(str(f), media_type="text/tab-separated-values", filename=f.name)
 
 
 def _drb3_qc(c1: int, c2: int, zyg: str) -> str:
@@ -1234,7 +1282,7 @@ def api_job_table(job_id: str):
     run_folder = ""
     try:
         manifest = json.loads((cwd / "run_manifest.json").read_text(encoding="utf-8"))
-        run_folder = Path(manifest.get("run_dir", "")).name
+        run_folder = manifest.get("run_folder", "")
     except (OSError, json.JSONDecodeError):
         pass
     run_map = _barcode_map(cfg).get(run_folder, {})

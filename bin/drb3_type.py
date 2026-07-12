@@ -32,15 +32,19 @@ def sh(c):
 
 def main():
     if len(sys.argv) < 5:
-        sys.exit("usage: drb3_type.py <barcode> <sample> <run_dir> <outdir>")
-    bc, sample, run_dir, outdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-    raw = os.path.join(run_dir, bc)
+        sys.exit("usage: drb3_type.py <barcode> <sample> <reads_source> <outdir>")
+    bc, sample, reads_source, outdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
     wd = os.path.join(outdir, bc)
     os.makedirs(wd, exist_ok=True)
-    if not os.path.isdir(raw):
+    # reads_source is either a barcode DIRECTORY (linked ONT run: cat its chunks)
+    # or a single FASTQ FILE (uploaded per-sample reads).
+    if os.path.isdir(reads_source):
+        sh(f"cat {q(reads_source)}/*.fastq.gz > {q(wd)}/m.fq.gz 2>/dev/null")
+    elif os.path.isfile(reads_source):
+        sh(f"cat {q(reads_source)} > {q(wd)}/m.fq.gz 2>/dev/null")
+    else:
         print(f"{bc}\t{sample}\t0\t\t\tMISSING")
         return
-    sh(f"cat {q(raw)}/*.fastq.gz > {q(wd)}/m.fq.gz 2>/dev/null")
     sh(f"nanoq -i {q(wd)}/m.fq.gz -q 10 -l 400 --max-len 850 -o {q(wd)}/f.fq.gz 2>/dev/null")
     sh(f"zcat {q(wd)}/f.fq.gz 2>/dev/null | head -40000 | "
        f"awk 'NR%4==1{{print \">\"substr($1,2)}} NR%4==2{{print}}' > {q(wd)}/reads.fa")

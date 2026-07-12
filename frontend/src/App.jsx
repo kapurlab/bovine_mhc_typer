@@ -32,6 +32,8 @@ export default function App() {
   const [projectRuns, setProjectRuns] = useState([]);        // linked into the project
   const [inputs, setInputs] = useState(null);                // {runs, sheet}
   const [linkSel, setLinkSel] = useState("");
+  const [seqTab, setSeqTab] = useState("link");
+  const [exampleSheets, setExampleSheets] = useState([]);
   const [runPath, setRunPath] = useState("");
   const [barcodes, setBarcodes] = useState([]);
   const [selected, setSelected] = useState({});
@@ -67,6 +69,7 @@ export default function App() {
       ]);
       setConfig(c); setProjects(p || []); setAvailableRuns(r || []);
       if (p?.length && !project) setProject(p[0].name);
+      fetch("./api/example-sheets").then((x) => x.json()).then(setExampleSheets).catch(() => {});
     } catch (e) { setError(String(e)); }
   }
 
@@ -114,6 +117,18 @@ export default function App() {
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.status);
       setLinkSel(""); loadProject(project);
+    } catch (e) { setError(String(e)); }
+  }
+
+  async function uploadFastqs(files) {
+    if (!files?.length || !project) return;
+    setError("");
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    try {
+      const res = await fetch(`./api/projects/${encodeURIComponent(project)}/upload`, { method: "POST", body: fd });
+      if (!res.ok) throw new Error((await res.json()).detail || res.status);
+      loadProject(project);
     } catch (e) { setError(String(e)); }
   }
 
@@ -221,28 +236,54 @@ export default function App() {
               <div className="panel-header"><h3>Inputs {project ? <span className="muted">· {project}</span> : null}</h3></div>
               {!project ? <p className="empty-msg">Select a project to load its inputs.</p> : (
                 <>
-                  <label className="form-label">Sequences — link a run folder</label>
-                  <div className="row">
-                    <select value={linkSel} onChange={(e) => setLinkSel(e.target.value)}>
-                      <option value="">— available runs —</option>
-                      {availableRuns.map((r) => <option key={r.path} value={r.path}>{r.name} ({r.barcodes.length})</option>)}
-                    </select>
-                    <button className="ghost action" disabled={!linkSel} onClick={linkRun}>Link</button>
+                  <label className="form-label">Sequences</label>
+                  <div className="row" style={{ gap: 6, marginBottom: 8 }}>
+                    {["link", "upload"].map((t) => (
+                      <button key={t} className="ghost" onClick={() => setSeqTab(t)}
+                              style={{ fontWeight: seqTab === t ? 600 : 400, borderColor: seqTab === t ? "#4c8c8a" : undefined, color: seqTab === t ? "#3a6f6d" : undefined }}>
+                        {t === "link" ? "Link a run" : "Upload"}
+                      </button>
+                    ))}
                   </div>
+                  {seqTab === "link" ? (
+                    <>
+                      <div className="row">
+                        <select value={linkSel} onChange={(e) => setLinkSel(e.target.value)}>
+                          <option value="">— available runs —</option>
+                          {availableRuns.map((r) => <option key={r.path} value={r.path}>{r.name} ({r.barcodes.length})</option>)}
+                        </select>
+                        <button className="ghost action" disabled={!linkSel} onClick={linkRun}>Link</button>
+                      </div>
+                      <p className="form-hint">Symlinked from the runs folder — no copy.</p>
+                    </>
+                  ) : (
+                    <>
+                      <label className="file-label" style={{ display: "inline-block" }}>
+                        <input type="file" accept=".fastq.gz,.fq.gz" multiple style={{ display: "none" }} onChange={(e) => uploadFastqs(e.target.files)} />
+                        <span className="ghost action">Choose FASTQ files…</span>
+                      </label>
+                      <p className="form-hint">Each uploaded FASTQ becomes one sample (appears under “Uploaded reads”).</p>
+                    </>
+                  )}
                   <div className="note" style={{ marginTop: 4 }}>
                     {inputs?.runs?.length
                       ? inputs.runs.map((r) => <span key={r.name} className="read-badge" style={{ marginRight: 6 }}>{r.name} · {r.barcodes} bc</span>)
                       : <span className="muted">No runs linked yet.</span>}
                   </div>
 
-                  <label className="form-label" style={{ marginTop: 12 }}>Sample sheet (barcode → sample → tissue → amplicon)</label>
-                  <div className="row">
-                    <input type="file" accept=".tsv,.txt,.csv" onChange={(e) => uploadSheet(e.target.files[0])} />
+                  <label className="form-label" style={{ marginTop: 14 }}>Sample sheet <span className="muted">— barcode → sample → tissue → amplicon</span></label>
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <label className="file-label"><input type="file" accept=".tsv,.txt,.csv" style={{ display: "none" }} onChange={(e) => uploadSheet(e.target.files[0])} /><span className="ghost action">Upload sheet</span></label>
+                    <a className="ghost action" href="./api/example-sheets/TEMPLATE_sample_sheet.tsv" style={{ textDecoration: "none" }}>Template</a>
+                    <select defaultValue="" onChange={(e) => { if (e.target.value) window.open(`./api/example-sheets/${encodeURIComponent(e.target.value)}`, "_blank"); e.target.value = ""; }}>
+                      <option value="">Example sheets…</option>
+                      {exampleSheets.filter((s) => !s.template).map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                    </select>
                   </div>
                   <div className="note" style={{ marginTop: 4 }}>
                     {inputs?.sheet?.present
                       ? <span className="scope-badge scope-shared">sheet loaded · {inputs.sheet.barcodes} barcodes</span>
-                      : <span className="muted">No sample sheet — samples will show barcode numbers only.</span>}
+                      : <span className="muted">No sheet — falls back to the site map, then barcode numbers.</span>}
                   </div>
                 </>
               )}

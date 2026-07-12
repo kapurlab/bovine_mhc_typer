@@ -1,0 +1,21 @@
+run_folder	amplicon	barcode	sample_id	tissue	lab_id	notes
+20260519_All Amplicons_20_Liver_Samples	Bov7/11	barcode01	L050826_1.1	liver	L050826_1.1	
+20260519_All Amplicons_20_Liver_Samples	Bov7/11	barcode02	L050826_1.2	liver	L050826_1.2	
+20260519_All Amplicons_20_Liver_Samples	Bov7/11	barcode03	L050826_1.3	liver	L050826_1.3	
+20260519_All Amplicons_20_Liver_Samples	BosEx	barcode04	L050826_1.1	liver	L050826_1.1	
+20260519_All Amplicons_20_Liver_Samples	BosEx	barcode05	L050826_1.2	liver	L050826_1.2	
+20260519_All Amplicons_20_Liver_Samples	BosEx	barcode06	L050826_1.3	liver	L050826_1.3	
+20260519_All Amplicons_20_Liver_Samples	DRB3	barcode07	L050826_1.1	liver	L050826_1.1	
+20260519_All Amplicons_20_Liver_Samples	DRB3	barcode08	L050826_1.2	liver	L050826_1.2	
+20260519_All Amplicons_20_Liver_Samples	DRB3	barcode09	L050826_1.3	liver	L050826_1.3	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode10	L050826_1.1	liver	L050826_1.1	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode11	L042426_1.2	liver	L042426_1.2	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode12	L050826_1.2	liver	L050826_1.2	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode13	L042426_1.2	liver	L042426_1.2	replicate_2_possible_data_entry_duplicate
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode14	L050826_1.3	liver	L050826_1.3	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode15	L042426_1.2	liver	L042426_1.2	replicate_3_possible_data_entry_duplicate
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode16	L042726_1.1	liver	L042726_1.1	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode17	L042726_1.2	liver	L042726_1.2	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode18	L042726_1.3	liver	L042726_1.3	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode19	L042726_1.4	liver	L042726_1.4	
+20260519_All Amplicons_20_Liver_Samples	5UTR	barcode20	L042726_1.5	liver	L042726_1.5	
