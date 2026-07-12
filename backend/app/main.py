@@ -1034,30 +1034,36 @@ def api_run(payload: RunPayload):
     return JSONResponse({"job_id": job_id, "run_dir": str(out_dir)})
 
 
-def _parse_sheet(path: str) -> Dict[str, Dict[str, Dict[str, str]]]:
-    """Parse a sample sheet TSV into {run_folder: {barcode: {sample, tissue, amplicon}}}.
-    Columns needed: run_folder, barcode, sample_id (+ optional tissue, amplicon).
-    Drives animal IDs in the picker and per-barcode amplicon auto-run."""
+def _parse_sheet(path: str, default_run: str = "") -> Dict[str, Dict[str, Dict[str, str]]]:
+    """Parse a sample sheet (TSV *or* CSV — the delimiter is sniffed) into
+    {run_folder: {barcode: {sample, tissue, amplicon}}}. Required columns:
+    barcode, sample_id (+ optional run_folder, tissue, amplicon). A per-run
+    in-folder sheet omits run_folder — its rows go under `default_run`."""
     out: Dict[str, Dict[str, Dict[str, str]]] = {}
     if not path or not Path(path).is_file():
         return out
     try:
-        with open(path, encoding="utf-8") as fh:
-            header = fh.readline().rstrip("\n").split("\t")
+        with open(path, encoding="utf-8-sig") as fh:
+            first = fh.readline()
+            delim = "\t" if first.count("\t") >= first.count(",") else ","
+            header = [h.strip() for h in first.rstrip("\n").split(delim)]
             idx = {name: i for i, name in enumerate(header)}
-            rf, bc, sid = idx.get("run_folder"), idx.get("barcode"), idx.get("sample_id")
-            tis, amp = idx.get("tissue"), idx.get("amplicon")
-            if rf is None or bc is None or sid is None:
+            bc, sid = idx.get("barcode"), idx.get("sample_id")
+            if bc is None or sid is None:
                 return out
+            rf, tis, amp = idx.get("run_folder"), idx.get("tissue"), idx.get("amplicon")
             for line in fh:
-                f = line.rstrip("\n").split("\t")
-                if len(f) <= max(rf, bc, sid):
+                if not line.strip():
+                    continue
+                f = [c.strip() for c in line.rstrip("\n").split(delim)]
+                if len(f) <= max(bc, sid):
                     continue
 
                 def g(i):
                     return f[i] if i is not None and len(f) > i else ""
 
-                out.setdefault(f[rf], {}).setdefault(f[bc], {
+                run = f[rf] if rf is not None and len(f) > rf and f[rf] else default_run
+                out.setdefault(run, {}).setdefault(f[bc], {
                     "sample": f[sid], "tissue": g(tis), "amplicon": g(amp),
                 })
     except OSError:
@@ -1071,8 +1077,18 @@ def _barcode_map(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, str]]]:
 
 
 def _project_sheet(project_dir: Path) -> Dict[str, Dict[str, Dict[str, str]]]:
-    """A project's own uploaded sample sheet; falls back to the site map."""
+    """A project's own uploaded sample sheet."""
     return _parse_sheet(str(project_dir / "sample_sheet.tsv"))
+
+
+def _run_sheet(run_dir: Path) -> Dict[str, Dict[str, str]]:
+    """A sample sheet that travels *inside* the run folder — the preferred source
+    (imported from OneDrive with the reads). Flat {barcode: {sample, tissue, amplicon}}."""
+    for name in ("sample_sheet.tsv", "sample_sheet.csv", "sample_sheet.txt"):
+        p = run_dir / name
+        if p.is_file():
+            return _parse_sheet(str(p), default_run=run_dir.name).get(run_dir.name, {})
+    return {}
 
 
 @app.get("/api/runs")
@@ -1097,10 +1113,11 @@ def api_runs():
             if not names:
                 continue
             seen.add(str(d))
-            run_map = bmap.get(d.name, {})
+            run_map = _run_sheet(d) or bmap.get(d.name, {})
             barcodes = [{"barcode": b,
                          "sample": run_map.get(b, {}).get("sample", ""),
-                         "tissue": run_map.get(b, {}).get("tissue", "")}
+                         "tissue": run_map.get(b, {}).get("tissue", ""),
+                         "amplicon": run_map.get(b, {}).get("amplicon", "")}
                         for b in names]
             out.append({"name": d.name, "path": str(d), "barcodes": barcodes})
     return JSONResponse(out)
@@ -1198,7 +1215,7 @@ def api_project_runs(name: str):
                 continue
             if not names:
                 continue
-            rmap = sheet.get(d.name) or site.get(d.name) or {}
+            rmap = _run_sheet(d) or sheet.get(d.name) or site.get(d.name) or {}
             barcodes = [{"barcode": b,
                          "sample": rmap.get(b, {}).get("sample", ""),
                          "tissue": rmap.get(b, {}).get("tissue", ""),

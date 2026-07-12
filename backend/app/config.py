@@ -55,7 +55,7 @@ DEFAULTS: Dict[str, Any] = {
     "shared_projects_root": _DEFAULT_SHARED_PROJECTS_ROOT,
     # Where run folders of barcoded ONT FASTQ live (rclone-synced). Users can
     # also point the app at a project's own download/ dir.
-    "runs_root": _first_existing("/home/vxk1/BoLA_MHC/data", str(Path.home() / "BoLA_MHC" / "data")),
+    "runs_root": _first_existing("/srv/kapurlab/databases/mhc/runs", "/home/vxk1/BoLA_MHC/data"),
     # barcode -> animal/sample map (run_date, run_folder, amplicon, barcode,
     # sample_id, lab_id, tissue, ...). Lets the GUI show animal IDs, not barcodes.
     "barcode_map": _first_existing("/home/vxk1/BoLA_MHC/barcode_sample_map.tsv", ""),
