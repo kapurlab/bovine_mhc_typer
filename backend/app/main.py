@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiofiles
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1160,6 +1160,38 @@ def api_project_link_run(name: str, payload: LinkRunRequest):
         raise HTTPException(409, f"Run already linked: {src.name}")
     target.symlink_to(src.resolve())
     return JSONResponse({"linked": src.name})
+
+
+@app.post("/api/projects/{name}/upload-run")
+async def api_project_upload_run(name: str,
+                                 paths: str = Form(...),
+                                 files: List[UploadFile] = File(...)):
+    """Upload a whole run folder from a local machine (barcodeNN/*.fastq.gz +
+    sample_sheet.csv), preserving structure into the project's runs/. `paths` is
+    a JSON array of each file's relative path (browser webkitRelativePath)."""
+    project_dir = _writable_project_dir(name)
+    try:
+        rel_paths = json.loads(paths)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Bad paths payload")
+    runs_dir = project_dir / "runs"
+    saved, run_root = 0, ""
+    for f, rel in zip(files, rel_paths):
+        parts = [p for p in Path(str(rel).replace("\\", "/")).parts if p not in ("..", "", "/")]
+        if not parts:
+            continue
+        if not run_root:
+            run_root = parts[0]
+        target = runs_dir.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(target, "wb") as out:
+            while True:
+                chunk = await f.read(1024 * 1024)
+                if not chunk:
+                    break
+                await out.write(chunk)
+        saved += 1
+    return JSONResponse({"saved": saved, "run": run_root})
 
 
 @app.post("/api/projects/{name}/sample-sheet")

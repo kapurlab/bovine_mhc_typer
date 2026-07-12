@@ -120,6 +120,20 @@ export default function App() {
     } catch (e) { setError(String(e)); }
   }
 
+  async function uploadRunFolder(files) {
+    if (!files?.length || !project) return;
+    setError("");
+    const fd = new FormData();
+    const paths = [];
+    for (const f of files) { fd.append("files", f); paths.push(f.webkitRelativePath || f.name); }
+    fd.append("paths", JSON.stringify(paths));
+    try {
+      const res = await fetch(`./api/projects/${encodeURIComponent(project)}/upload-run`, { method: "POST", body: fd });
+      if (!res.ok) throw new Error((await res.json()).detail || res.status);
+      loadProject(project);
+    } catch (e) { setError(String(e)); }
+  }
+
   async function uploadFastqs(files) {
     if (!files?.length || !project) return;
     setError("");
@@ -258,11 +272,17 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <label className="file-label" style={{ display: "inline-block" }}>
-                        <input type="file" accept=".fastq.gz,.fq.gz" multiple style={{ display: "none" }} onChange={(e) => uploadFastqs(e.target.files)} />
-                        <span className="ghost action">Choose FASTQ files…</span>
-                      </label>
-                      <p className="form-hint">Each uploaded FASTQ becomes one sample (appears under “Uploaded reads”).</p>
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                        <label className="file-label">
+                          <input type="file" webkitdirectory="" directory="" multiple style={{ display: "none" }} onChange={(e) => uploadRunFolder(e.target.files)} />
+                          <span className="ghost action">Upload a run folder…</span>
+                        </label>
+                        <label className="file-label">
+                          <input type="file" accept=".fastq.gz,.fq.gz" multiple style={{ display: "none" }} onChange={(e) => uploadFastqs(e.target.files)} />
+                          <span className="ghost action">…or loose FASTQs</span>
+                        </label>
+                      </div>
+                      <p className="form-hint">A run folder (barcodeNN/ + sample_sheet.csv) uploads as a full run; loose FASTQs each become one sample. Best for smaller runs — large runs come via OneDrive import.</p>
                     </>
                   )}
                   <div className="note" style={{ marginTop: 4 }}>
