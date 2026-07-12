@@ -204,12 +204,10 @@ def _normalize_project_name(name: str) -> str:
 
 
 def _ensure_project_dirs(project_dir: Path) -> None:
+    # MHC Typer layout: linked/uploaded runs, loose uploads, and typing outputs.
     (project_dir / "download").mkdir(parents=True, exist_ok=True)
-    (project_dir / "amr").mkdir(parents=True, exist_ok=True)
-    # vSNP-compatible layout so the project is shared cleanly between tools.
-    (project_dir / "step1").mkdir(parents=True, exist_ok=True)
-    (project_dir / "step2" / "vcf_source").mkdir(parents=True, exist_ok=True)
-    (project_dir / f"{project_dir.name}_VCFs").mkdir(parents=True, exist_ok=True)
+    (project_dir / "runs").mkdir(parents=True, exist_ok=True)
+    (project_dir / "mhc").mkdir(parents=True, exist_ok=True)
 
 
 def _create_project(name: str, scope: str) -> Path:
@@ -973,8 +971,8 @@ def api_run(payload: RunPayload):
             "Class I is disabled (provisional). Enable it in Settings to run non-DRB3 amplicons.",
         )
 
-    run_tag = run_src.name.replace(" ", "_")
-    out_dir = project_dir / "mhc" / f"{run_tag}__{amplicon}"
+    run_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", run_src.name).strip("_")
+    out_dir = project_dir / "mhc" / f"{run_tag}__{_amplicon_token(amplicon)}"
 
     # Refuse to start a second pipeline in the same output directory (race).
     for existing in job_manager.list_jobs():
@@ -1052,6 +1050,7 @@ def _parse_sheet(path: str, default_run: str = "") -> Dict[str, Dict[str, Dict[s
             if bc is None or sid is None:
                 return out
             rf, tis, amp = idx.get("run_folder"), idx.get("tissue"), idx.get("amplicon")
+            aid = idx.get("animal_id")
             for line in fh:
                 if not line.strip():
                     continue
@@ -1064,7 +1063,9 @@ def _parse_sheet(path: str, default_run: str = "") -> Dict[str, Dict[str, Dict[s
 
                 run = f[rf] if rf is not None and len(f) > rf and f[rf] else default_run
                 out.setdefault(run, {}).setdefault(f[bc], {
-                    "sample": f[sid], "tissue": g(tis), "amplicon": g(amp),
+                    "sample": f[sid],
+                    "animal": g(aid) or f[sid],   # animal_id, falling back to sample_id
+                    "tissue": g(tis), "amplicon": g(amp),
                 })
     except OSError:
         pass
@@ -1082,30 +1083,47 @@ def _project_sheet(project_dir: Path) -> Dict[str, Dict[str, Dict[str, str]]]:
 
 
 def _run_sheet(run_dir: Path) -> Dict[str, Dict[str, str]]:
-    """A sample sheet that travels *inside* the run folder — the preferred source
-    (imported from OneDrive with the reads). The folder IS the run, so any
-    run_folder column is ignored: merge every barcode row. Keyed lowercase."""
-    for name in ("sample_sheet.tsv", "sample_sheet.csv", "sample_sheet.txt"):
-        p = run_dir / name
-        if p.is_file():
-            parsed = _parse_sheet(str(p), default_run=run_dir.name)
-            merged: Dict[str, Dict[str, str]] = {}
-            for barcodes in parsed.values():
-                for bc, meta in barcodes.items():
-                    merged[bc.lower()] = meta
-            return merged
-    return {}
+    """A sample sheet that travels *inside* the run folder — the preferred source.
+    Accepts sample_sheet.csv/tsv OR sample_sheet_YYYYMMDD.csv/tsv; the latest date
+    in the name wins (plain = baseline), mtime breaks ties. The folder IS the run,
+    so any run_folder column is ignored (merge all rows). Keyed lowercase."""
+    cands = list(run_dir.glob("sample_sheet*.csv")) + list(run_dir.glob("sample_sheet*.tsv"))
+    cands = [p for p in cands if p.is_file()]
+    if not cands:
+        return {}
+
+    def key(p):
+        m = re.search(r"(\d{8})", p.name)
+        try:
+            return (m.group(1) if m else "00000000", p.stat().st_mtime)
+        except OSError:
+            return ("00000000", 0)
+
+    chosen = max(cands, key=key)
+    parsed = _parse_sheet(str(chosen), default_run=run_dir.name)
+    merged: Dict[str, Dict[str, str]] = {}
+    for barcodes in parsed.values():
+        for bc, meta in barcodes.items():
+            merged[bc.lower()] = meta
+    merged["__sheet__"] = {"name": chosen.name}  # surfaced so the UI shows which sheet was used
+    return merged
 
 
 def _annotate(rmap_raw: Dict[str, Dict[str, str]], names) -> List[Dict[str, str]]:
-    """Attach sample/tissue/amplicon to each barcode, matching case-insensitively
-    (runs use Barcode01 or barcode01; sheets may differ)."""
-    rmap = {k.lower(): v for k, v in rmap_raw.items()}
+    """Attach sample/animal/tissue/amplicon to each barcode, matching
+    case-insensitively (runs use Barcode01 or barcode01; sheets may differ)."""
+    rmap = {k.lower(): v for k, v in rmap_raw.items() if k != "__sheet__"}
     return [{"barcode": b,
              "sample": rmap.get(b.lower(), {}).get("sample", ""),
+             "animal": rmap.get(b.lower(), {}).get("animal", ""),
              "tissue": rmap.get(b.lower(), {}).get("tissue", ""),
              "amplicon": rmap.get(b.lower(), {}).get("amplicon", "")}
             for b in names]
+
+
+def _amplicon_token(amp: str) -> str:
+    """Path-safe amplicon token for output dirs (Bov7/11 -> Bov711, 5'UTR -> 5UTR)."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(amp or "")) or "amp"
 
 
 @app.get("/api/runs")
@@ -1275,6 +1293,58 @@ def api_project_runs(name: str):
     return JSONResponse(out)
 
 
+class ImportRunRequest(BaseModel):
+    run: str
+
+
+def _rclone_env(cfg) -> Dict[str, str]:
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONUNBUFFERED": "1"}
+    if cfg.get("rclone_config"):
+        env["RCLONE_CONFIG"] = cfg["rclone_config"]
+    return env
+
+
+@app.get("/api/onedrive-runs")
+def api_onedrive_runs():
+    """Runs sitting in the OneDrive inbox (For_WGS3_Upload), flagged for whether
+    each is already in the library."""
+    cfg = load_config()
+    remote = cfg.get("onedrive_remote", "").strip()
+    inbox = cfg.get("onedrive_inbox", "For_WGS3_Upload").strip()
+    if not remote:
+        return JSONResponse([])
+    try:
+        r = subprocess.run(["rclone", "lsf", "--dirs-only", f"{remote}{inbox}"],
+                           text=True, capture_output=True, timeout=45, env={**os.environ, **_rclone_env(cfg)})
+        dirs = [d.rstrip("/") for d in r.stdout.splitlines() if d.strip()]
+    except (subprocess.SubprocessError, OSError):
+        dirs = []
+    lib = Path(cfg.get("runs_root", ""))
+    return JSONResponse([{"name": d, "in_library": (lib / d).exists()} for d in sorted(dirs)])
+
+
+@app.post("/api/import-run")
+def api_import_run(payload: ImportRunRequest):
+    """Import one inbox run into the library (background rclone job; archives on success)."""
+    cfg = load_config()
+    remote = cfg.get("onedrive_remote", "").strip()
+    inbox = cfg.get("onedrive_inbox", "For_WGS3_Upload").strip()
+    archive = cfg.get("onedrive_archive", "Uploaded_Archive").strip()
+    lib = cfg.get("runs_root", "").strip()
+    run = (payload.run or "").strip().strip("/")
+    if not remote or not lib:
+        raise HTTPException(400, "OneDrive/library not configured")
+    if not run or "/" in run or run.startswith("."):
+        raise HTTPException(400, "Invalid run name")
+    for j in job_manager.list_jobs():
+        if j.get("status") == "running" and j.get("name") == f"import {run}":
+            raise HTTPException(409, f"{run} is already importing (job {j['id'][:8]}).")
+    command = ["bash", str(_BIN_DIR / "import_run.sh"), remote, inbox, archive, lib, run]
+    job_id = job_manager.start_job(name=f"import {run}", command=command,
+                                   cwd=Path(lib), env=_rclone_env(cfg))
+    return JSONResponse({"job_id": job_id})
+
+
 _EXAMPLE_SHEETS = _REPO_ROOT / "examples" / "sample_sheets"
 
 
@@ -1358,7 +1428,7 @@ def api_job_table(job_id: str):
         summary["total"] += 1
         rows.append({
             "barcode": bc,
-            "animal": run_map.get(bc, {}).get("sample", "") or _sample,
+            "animal": run_map.get(bc, {}).get("animal", "") or _sample,
             "tissue": run_map.get(bc, {}).get("tissue", ""),
             "allele1": a1, "count1": c1,
             "allele2": a2, "count2": c2,

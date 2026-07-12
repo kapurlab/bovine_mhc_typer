@@ -72,11 +72,14 @@ def main():
                 bcn = str(bc).strip()
             samp = str(r[ci_s]).strip() if r[ci_s] is not None else ""
             amp = norm_amplicon(r[ci_a]) if ci_a is not None else ""
-            out.append([bcn, samp, amp, tissue])
+            # animal_id defaults to sample_id (correct where sample_id is the
+            # ear-tag, e.g. blood runs); edit it for liver runs where sample_id
+            # is a per-sample label so genotypes group at the animal level.
+            out.append([bcn, samp, samp, amp, tissue])
         (run / "sample_sheet.tsv").unlink(missing_ok=True)  # drop any stale sheet
         with open(run / "sample_sheet.csv", "w", newline="") as fh:
             w = csv.writer(fh)
-            w.writerow(["barcode", "sample_id", "amplicon", "tissue"])
+            w.writerow(["barcode", "sample_id", "animal_id", "amplicon", "tissue"])
             w.writerows(out)
         print(f"  {sn} -> {run.name}/sample_sheet.csv ({len(out)} rows)")
 

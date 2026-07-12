@@ -56,6 +56,12 @@ DEFAULTS: Dict[str, Any] = {
     # Where run folders of barcoded ONT FASTQ live (rclone-synced). Users can
     # also point the app at a project's own download/ dir.
     "runs_root": _first_existing("/srv/kapurlab/databases/mhc/runs", "/home/vxk1/BoLA_MHC/data"),
+    # OneDrive import (rclone). Inbox runs are copied into runs_root, then moved
+    # to the archive. rclone_config lets the app use a shared config for all users.
+    "onedrive_remote": "rxk104_mhc:",
+    "onedrive_inbox": "For_WGS3_Upload",
+    "onedrive_archive": "Uploaded_Archive",
+    "rclone_config": _first_existing("/home/vxk1/.config/rclone/rclone.conf", ""),
     # barcode -> animal/sample map (run_date, run_folder, amplicon, barcode,
     # sample_id, lab_id, tissue, ...). Lets the GUI show animal IDs, not barcodes.
     "barcode_map": _first_existing("/home/vxk1/BoLA_MHC/barcode_sample_map.tsv", ""),

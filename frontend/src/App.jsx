@@ -29,6 +29,7 @@ export default function App() {
   const [project, setProject] = useState("");
   const [newProject, setNewProject] = useState("");
   const [availableRuns, setAvailableRuns] = useState([]);   // runs_root (to link)
+  const [onedriveRuns, setOnedriveRuns] = useState(null);   // OneDrive inbox (to import)
   const [projectRuns, setProjectRuns] = useState([]);        // linked into the project
   const [inputs, setInputs] = useState(null);                // {runs, sheet}
   const [linkSel, setLinkSel] = useState("");
@@ -107,6 +108,36 @@ export default function App() {
     } catch (e) { setError(String(e)); }
   }
 
+  async function loadOnedriveRuns() {
+    setOnedriveRuns(null);
+    try {
+      const r = await fetch("./api/onedrive-runs").then((x) => x.json());
+      setOnedriveRuns(r || []);
+    } catch (e) { setOnedriveRuns([]); }
+  }
+
+  async function importRun(name) {
+    setError("");
+    try {
+      const res = await fetch("./api/import-run", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run: name }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.status);
+      const { job_id } = await res.json();
+      setJob({ id: job_id, status: "running" }); setBusy(true); setLog("");
+      clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        const r = await fetch(`./api/jobs/${job_id}/logtext`).then((x) => x.json());
+        setLog(r.log || ""); setJob({ id: job_id, status: r.status });
+        if (r.status === "succeeded" || r.status === "failed") {
+          clearInterval(pollRef.current); setBusy(false);
+          load(); loadOnedriveRuns(); if (project) loadProject(project);
+        }
+      }, 1500);
+    } catch (e) { setError(String(e)); }
+  }
+
   async function linkRun() {
     if (!linkSel || !project) return;
     setError("");
@@ -169,7 +200,7 @@ export default function App() {
     if (!chosen.length) return setError("Select at least one sample.");
     setBusy(true); setLog(""); setResults([]); setTable(null);
     try {
-      const body = { project, run_dir: runPath, amplicon, barcodes: chosen.map((b) => `${b.barcode}:${b.sample || b.barcode}`) };
+      const body = { project, run_dir: runPath, amplicon, barcodes: chosen.map((b) => `${b.barcode}:${b.animal || b.sample || b.barcode}`) };
       if (threads) body.threads = Number(threads);
       const res = await fetch("./api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail || res.status);
@@ -252,14 +283,36 @@ export default function App() {
                 <>
                   <label className="form-label">Sequences</label>
                   <div className="row" style={{ gap: 6, marginBottom: 8 }}>
-                    {["link", "upload"].map((t) => (
-                      <button key={t} className="ghost" onClick={() => setSeqTab(t)}
+                    {[["import", "Import (OneDrive)"], ["link", "Link"], ["upload", "Upload"]].map(([t, lab]) => (
+                      <button key={t} className="ghost" onClick={() => { setSeqTab(t); if (t === "import" && onedriveRuns === null) loadOnedriveRuns(); }}
                               style={{ fontWeight: seqTab === t ? 600 : 400, borderColor: seqTab === t ? "#4c8c8a" : undefined, color: seqTab === t ? "#3a6f6d" : undefined }}>
-                        {t === "link" ? "Link a run" : "Upload"}
+                        {lab}
                       </button>
                     ))}
                   </div>
-                  {seqTab === "link" ? (
+                  {seqTab === "import" ? (
+                    <>
+                      <div className="row" style={{ justifyContent: "space-between" }}>
+                        <span className="muted" style={{ fontSize: 13 }}>Runs in the OneDrive inbox</span>
+                        <button className="ghost" onClick={loadOnedriveRuns}>Refresh</button>
+                      </div>
+                      {onedriveRuns === null ? <p className="loading-text">Checking OneDrive…</p>
+                        : onedriveRuns.length === 0 ? <p className="empty-msg">Inbox empty — drop runs in For_WGS3_Upload/.</p>
+                          : <div className="sample-list" style={{ maxHeight: 220, overflowY: "auto" }}>
+                              {onedriveRuns.map((r) => (
+                                <div key={r.name} className="list-item">
+                                  <div className="item-top">
+                                    <span className="list-title">{r.name}</span>
+                                    {r.in_library
+                                      ? <span className="scope-badge scope-shared">in library</span>
+                                      : <button className="ghost action" disabled={busy} onClick={() => importRun(r.name)}>Import</button>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>}
+                      <p className="form-hint">Import copies the run into the library and archives the OneDrive copy. Progress shows in the Pipeline Log.</p>
+                    </>
+                  ) : seqTab === "link" ? (
                     <>
                       <div className="row">
                         <select value={linkSel} onChange={(e) => setLinkSel(e.target.value)}>
