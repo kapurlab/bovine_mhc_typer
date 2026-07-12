@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """MHC Typer pipeline entry point — the command the FastAPI backend launches.
 
-Types the samples listed in a manifest for one amplicon and writes the
-per-amplicon TSV + a provenance manifest into <outdir>. Prints unbuffered
-progress so the GUI's polling log shows live status.
+Reads a manifest of samples, each carrying its own amplicon, and routes each
+barcode to the pipeline for its amplicon (auto-run): DRB3 barcodes -> DRB3
+typing, Class-I barcodes -> the Class-I pipeline. Writes per-amplicon outputs +
+a provenance manifest into <outdir>. Unbuffered output for the polling log.
 
-  run_typing.py --manifest <tsv> --outdir <dir> --amplicon drb3
+  run_typing.py --manifest <tsv> --outdir <dir> [--run-folder <name>]
 
-The manifest is a headerless TSV of  barcode <tab> sample <tab> reads_source,
-where reads_source is a barcode DIRECTORY (linked ONT run) or a single FASTQ
-FILE (uploaded reads). Building it in the backend keeps every path off the
-command line (run/output folders may contain spaces or [brackets]).
-
-v1 wires the reliable DRB3 (Class II) path; Class I plugs in here.
+Manifest is a headerless TSV: barcode <tab> sample <tab> reads_source <tab>
+amplicon. reads_source is a barcode DIRECTORY (linked run) or a FASTQ FILE
+(uploaded). Building it in the backend keeps every path off the command line.
 """
 import argparse
 import concurrent.futures
@@ -27,6 +25,7 @@ import mhc_config as C
 
 HERE = Path(__file__).resolve().parent
 DRB3_HEADER = "barcode\tsample\tn_reads\tallele1:count\tallele2:count\tzygosity"
+CLASS_I = ("bov711", "bosex", "utr5")
 
 
 def _label(row: str) -> str:
@@ -42,7 +41,7 @@ def read_manifest(path):
         f = line.split("\t")
         if len(f) < 3:
             continue
-        rows.append((f[0], f[1], f[2]))  # barcode, sample, reads_source
+        rows.append((f[0], f[1], f[2], f[3] if len(f) > 3 else "drb3"))
     return rows
 
 
@@ -62,7 +61,7 @@ def run_drb3(entries, outdir, threads):
     print(f"[drb3] typing {len(entries)} samples (threads={threads})", flush=True)
     rows = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as ex:
-        futs = [ex.submit(one, bc, s, reads) for bc, s, reads in entries]
+        futs = [ex.submit(one, bc, s, reads) for bc, s, reads, _amp in entries]
         for fut in concurrent.futures.as_completed(futs):
             row = fut.result()
             rows.append(row)
@@ -74,11 +73,17 @@ def run_drb3(entries, outdir, threads):
     return str(out)
 
 
+def run_classI(amp, entries, outdir, threads):
+    # Placeholder until #3 wires classI_typed_pipeline -> reconcile -> haplotype.
+    print(f"[classI:{amp}] {len(entries)} samples — Class I typing is not yet wired "
+          f"(provisional). Skipped for now.", flush=True)
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--manifest", required=True, help="TSV: barcode, sample, reads_source")
+    ap.add_argument("--manifest", required=True, help="TSV: barcode, sample, reads_source, amplicon")
     ap.add_argument("--outdir", required=True)
-    ap.add_argument("--amplicon", default="drb3", choices=["drb3"])
     ap.add_argument("--run-folder", default="", help="source run folder name (for sheet lookups)")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("MHC_THREADS", "12")))
     a = ap.parse_args()
@@ -88,20 +93,30 @@ def main():
         sys.exit("manifest is empty")
     os.makedirs(a.outdir, exist_ok=True)
 
-    print(f"=== MHC Typer: {a.amplicon} · {len(entries)} samples ===", flush=True)
-    print(f"    refs    = {C.REFS}", flush=True)
-    print(f"    ont_bin = {C.ONT_BIN}", flush=True)
+    by_amp = {}
+    for e in entries:
+        by_amp.setdefault(e[3], []).append(e)
+
+    print(f"=== MHC Typer: {len(entries)} samples · amplicons {'+'.join(sorted(by_amp))} ===", flush=True)
+    print(f"    refs = {C.REFS}  ont_bin = {C.ONT_BIN}", flush=True)
 
     manifest = {
-        "amplicon": a.amplicon,
         "run_folder": a.run_folder,
         "n_samples": len(entries),
+        "amplicons": sorted(by_amp),
         "refs": str(C.REFS),
         "medaka_model": C.MEDAKA_MODEL,
         "outputs": {},
     }
-    if a.amplicon == "drb3":
-        manifest["outputs"]["drb3_typed"] = run_drb3(entries, a.outdir, a.threads)
+    for amp in sorted(by_amp):
+        group = by_amp[amp]
+        print(f"--- amplicon {amp}: {len(group)} samples ---", flush=True)
+        if amp == "drb3":
+            manifest["outputs"]["drb3_typed"] = run_drb3(group, a.outdir, a.threads)
+        elif amp in CLASS_I:
+            manifest["outputs"][f"classI_{amp}"] = run_classI(amp, group, a.outdir, a.threads)
+        else:
+            print(f"[skip] unknown amplicon '{amp}' ({len(group)} samples)", flush=True)
 
     (Path(a.outdir) / "run_manifest.json").write_text(json.dumps(manifest, indent=2))
     print("=== done ===", flush=True)

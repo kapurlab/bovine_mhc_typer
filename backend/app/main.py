@@ -943,11 +943,17 @@ def api_browse_dirs(path: str = ""):
     return JSONResponse({"path": str(p), "parent": parent, "entries": entries})
 
 
+class SampleEntry(BaseModel):
+    barcode: str
+    sample: str = ""
+    amplicon: str = ""           # sheet amplicon; routes the barcode to its pipeline
+
+
 class RunPayload(BaseModel):
     project: str
     run_dir: str                 # absolute path to the run folder (barcodeNN/ subdirs)
-    barcodes: List[str]          # "barcodeNN:sample_id" (sample optional)
-    amplicon: str = "drb3"       # v1: drb3 (Class II). Class I is gated behind config.
+    samples: List[SampleEntry]
+    force_amplicon: str = ""     # "" = auto (each sample's own amplicon from the sheet)
     threads: Optional[int] = None
 
 
@@ -961,43 +967,51 @@ def api_run(payload: RunPayload):
     run_src = Path(payload.run_dir)
     if not run_src.is_dir():
         raise HTTPException(400, f"Run folder not found: {payload.run_dir}")
-    if not payload.barcodes:
-        raise HTTPException(400, "No barcodes selected")
+    if not payload.samples:
+        raise HTTPException(400, "No samples selected")
 
-    amplicon = (payload.amplicon or "drb3").strip()
-    if amplicon != "drb3" and not cfg.get("enable_class_i", False):
-        raise HTTPException(
-            400,
-            "Class I is disabled (provisional). Enable it in Settings to run non-DRB3 amplicons.",
-        )
+    force = _amplicon_token(payload.force_amplicon) if payload.force_amplicon.strip() else ""
+    class_i_enabled = bool(cfg.get("enable_class_i", False))
 
     run_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", run_src.name).strip("_")
-    out_dir = project_dir / "mhc" / f"{run_tag}__{_amplicon_token(amplicon)}"
+    out_dir = project_dir / "mhc" / run_tag
 
     # Refuse to start a second pipeline in the same output directory (race).
     for existing in job_manager.list_jobs():
         if existing.get("status") == "running" and existing.get("cwd") == str(out_dir):
             raise HTTPException(
                 409,
-                f"A {amplicon} run is already in progress for {run_tag} "
+                f"A run is already in progress for {run_tag} "
                 f"(job {existing['id'][:8]}). Wait for it to finish before re-running.",
             )
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build a manifest (barcode, sample, reads_source) so no path — which may
-    # contain spaces or [brackets] — ever hits the command line. reads_source is
-    # the barcode DIRECTORY (linked ONT run) or a single FASTQ FILE (uploaded).
-    rows = []
-    for entry in payload.barcodes:
-        bc, _, sample = entry.partition(":")
+    # Build a 4-col manifest (barcode, sample, reads_source, amplicon) — each
+    # barcode routed to its own amplicon pipeline (auto), unless force overrides.
+    # No path ever hits the command line (spaces/[brackets] safe).
+    rows, skipped = [], []
+    for s in payload.samples:
+        bc = s.barcode.strip()
+        if not bc:
+            continue
+        amp = force or _amplicon_token(s.amplicon)
+        if not amp or amp == "amp":
+            skipped.append(f"{bc} (no amplicon)")
+            continue
+        if amp in _CLASS_I and not class_i_enabled:
+            skipped.append(f"{bc} (Class I disabled)")
+            continue
         src = run_src / bc
         if src.is_dir():
             reads = str(src)
         else:
             m = sorted(run_src.glob(f"{bc}*.fastq.gz"))
             reads = str(m[0]) if m else str(src)
-        rows.append(f"{bc}\t{sample or bc}\t{reads}")
+        rows.append(f"{bc}\t{s.sample or bc}\t{reads}\t{amp}")
+    if not rows:
+        raise HTTPException(400, "No runnable samples — no amplicon in the sheet, "
+                                 "or only Class-I barcodes with Class I disabled.")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.tsv"
     manifest_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
@@ -1005,7 +1019,6 @@ def api_run(payload: RunPayload):
     command = [sys.executable, "-u", str(script),
                "--manifest", str(manifest_path),
                "--outdir", str(out_dir),
-               "--amplicon", amplicon,
                "--run-folder", run_src.name]
     if payload.threads:
         command.extend(["--threads", str(int(payload.threads))])
@@ -1026,10 +1039,10 @@ def api_run(payload: RunPayload):
         "MHC_MEDAKA_MODEL": cfg.get("medaka_model", ""),
     }
 
-    job_name = (f"{payload.project}/{run_tag} — MHC Typer "
-                f"({amplicon.upper()}, {len(payload.barcodes)} barcodes)")
+    amps = "+".join(sorted({r.split("\t")[3] for r in rows}))
+    job_name = f"{payload.project}/{run_tag} — MHC Typer ({len(rows)} samples · {amps})"
     job_id = job_manager.start_job(name=job_name, command=command, cwd=out_dir, env=env)
-    return JSONResponse({"job_id": job_id, "run_dir": str(out_dir)})
+    return JSONResponse({"job_id": job_id, "run_dir": str(out_dir), "skipped": skipped})
 
 
 def _parse_sheet(path: str, default_run: str = "") -> Dict[str, Dict[str, Dict[str, str]]]:
@@ -1122,8 +1135,21 @@ def _annotate(rmap_raw: Dict[str, Dict[str, str]], names) -> List[Dict[str, str]
 
 
 def _amplicon_token(amp: str) -> str:
-    """Path-safe amplicon token for output dirs (Bov7/11 -> Bov711, 5'UTR -> 5UTR)."""
-    return re.sub(r"[^A-Za-z0-9]", "", str(amp or "")) or "amp"
+    """Canonical, path-safe pipeline token for a sheet amplicon value.
+    DRB3->drb3, Bov7/11->bov711, BosEx->bosex, 5'UTR->utr5."""
+    low = re.sub(r"[^a-z0-9]", "", str(amp or "").lower())
+    if "drb3" in low:
+        return "drb3"
+    if "bov" in low:
+        return "bov711"
+    if "bosex" in low:
+        return "bosex"
+    if "utr" in low:
+        return "utr5"
+    return low or "amp"
+
+
+_CLASS_I = {"bov711", "bosex", "utr5"}
 
 
 @app.get("/api/runs")

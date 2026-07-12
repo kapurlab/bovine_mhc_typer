@@ -38,7 +38,7 @@ export default function App() {
   const [runPath, setRunPath] = useState("");
   const [barcodes, setBarcodes] = useState([]);
   const [selected, setSelected] = useState({});
-  const [amplicon, setAmplicon] = useState("drb3");
+  const [amplicon, setAmplicon] = useState("auto");
   const [threads, setThreads] = useState("");
   const [job, setJob] = useState(null);
   const [log, setLog] = useState("");
@@ -200,7 +200,11 @@ export default function App() {
     if (!chosen.length) return setError("Select at least one sample.");
     setBusy(true); setLog(""); setResults([]); setTable(null);
     try {
-      const body = { project, run_dir: runPath, amplicon, barcodes: chosen.map((b) => `${b.barcode}:${b.animal || b.sample || b.barcode}`) };
+      const body = {
+        project, run_dir: runPath,
+        force_amplicon: amplicon === "auto" ? "" : amplicon,
+        samples: chosen.map((b) => ({ barcode: b.barcode, sample: b.animal || b.sample || b.barcode, amplicon: b.amplicon || "" })),
+      };
       if (threads) body.threads = Number(threads);
       const res = await fetch("./api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail || res.status);
@@ -400,18 +404,20 @@ export default function App() {
         <div className="panel">
           <div className="row-grid row-grid-split">
             <div className="input-column">
-              <label className="form-label">Amplicon</label>
+              <label className="form-label">Amplicon routing</label>
               <select value={amplicon} onChange={(e) => setAmplicon(e.target.value)}>
+                <option value="auto">Auto — each sample's amplicon (from the sheet)</option>
                 {AMPLICONS.map((a) => (
                   <option key={a.id} value={a.id} disabled={a.classI && !classIEnabled}>
-                    {a.label}{a.classI && !classIEnabled ? " (enable in Settings)" : ""}
+                    Force all → {a.label}{a.classI && !classIEnabled ? " (enable in Settings)" : ""}
                   </option>
                 ))}
               </select>
+              <p className="form-hint">Auto types each barcode down its own amplicon (a mixed run does DRB3 + Class-I in one go).</p>
               <label className="form-label" style={{ marginTop: 10 }}>Threads</label>
               <input placeholder="auto (12)" value={threads} onChange={(e) => setThreads(e.target.value.replace(/[^0-9]/g, ""))} />
               <button className="run-btn" disabled={busy} onClick={runTyping} style={{ marginTop: 12 }}>
-                {busy ? "Running…" : `▶ Run ${amplicon.toUpperCase()} typing`}
+                {busy ? "Running…" : (amplicon === "auto" ? "▶ Run typing (auto)" : `▶ Run ${amplicon.toUpperCase()} typing`)}
               </button>
             </div>
             <div className="input-column">
