@@ -1083,12 +1083,29 @@ def _project_sheet(project_dir: Path) -> Dict[str, Dict[str, Dict[str, str]]]:
 
 def _run_sheet(run_dir: Path) -> Dict[str, Dict[str, str]]:
     """A sample sheet that travels *inside* the run folder — the preferred source
-    (imported from OneDrive with the reads). Flat {barcode: {sample, tissue, amplicon}}."""
+    (imported from OneDrive with the reads). The folder IS the run, so any
+    run_folder column is ignored: merge every barcode row. Keyed lowercase."""
     for name in ("sample_sheet.tsv", "sample_sheet.csv", "sample_sheet.txt"):
         p = run_dir / name
         if p.is_file():
-            return _parse_sheet(str(p), default_run=run_dir.name).get(run_dir.name, {})
+            parsed = _parse_sheet(str(p), default_run=run_dir.name)
+            merged: Dict[str, Dict[str, str]] = {}
+            for barcodes in parsed.values():
+                for bc, meta in barcodes.items():
+                    merged[bc.lower()] = meta
+            return merged
     return {}
+
+
+def _annotate(rmap_raw: Dict[str, Dict[str, str]], names) -> List[Dict[str, str]]:
+    """Attach sample/tissue/amplicon to each barcode, matching case-insensitively
+    (runs use Barcode01 or barcode01; sheets may differ)."""
+    rmap = {k.lower(): v for k, v in rmap_raw.items()}
+    return [{"barcode": b,
+             "sample": rmap.get(b.lower(), {}).get("sample", ""),
+             "tissue": rmap.get(b.lower(), {}).get("tissue", ""),
+             "amplicon": rmap.get(b.lower(), {}).get("amplicon", "")}
+            for b in names]
 
 
 @app.get("/api/runs")
@@ -1113,12 +1130,7 @@ def api_runs():
             if not names:
                 continue
             seen.add(str(d))
-            run_map = _run_sheet(d) or bmap.get(d.name, {})
-            barcodes = [{"barcode": b,
-                         "sample": run_map.get(b, {}).get("sample", ""),
-                         "tissue": run_map.get(b, {}).get("tissue", ""),
-                         "amplicon": run_map.get(b, {}).get("amplicon", "")}
-                        for b in names]
+            barcodes = _annotate(_run_sheet(d) or bmap.get(d.name, {}), names)
             out.append({"name": d.name, "path": str(d), "barcodes": barcodes})
     return JSONResponse(out)
 
@@ -1215,12 +1227,7 @@ def api_project_runs(name: str):
                 continue
             if not names:
                 continue
-            rmap = _run_sheet(d) or sheet.get(d.name) or site.get(d.name) or {}
-            barcodes = [{"barcode": b,
-                         "sample": rmap.get(b, {}).get("sample", ""),
-                         "tissue": rmap.get(b, {}).get("tissue", ""),
-                         "amplicon": rmap.get(b, {}).get("amplicon", "")}
-                        for b in names]
+            barcodes = _annotate(_run_sheet(d) or sheet.get(d.name) or site.get(d.name) or {}, names)
             out.append({"name": d.name, "path": str(d.resolve()), "barcodes": barcodes})
 
     # Uploaded reads: each FASTQ in download/ is treated as one sample.
