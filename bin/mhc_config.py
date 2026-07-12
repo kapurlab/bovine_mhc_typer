@@ -28,6 +28,20 @@ MEDAKA_MODEL = _env("MHC_MEDAKA_MODEL", "r1041_e82_400bps_sup_v5.2.0")
 # BLAST binary (per handover: system blastn).
 BLASTN = _env("MHC_BLASTN", "/usr/bin/blastn")
 
+# Class I reference files, derived from the REFS bundle:
+#   MHCREF     — clean chr23 MHC contig (NC_037350.1) for on-target mapping
+#   BLAST_NUC  — IPD-MHC CDS db;  BLAST_GEN — IPD-MHC genomic db (gDNA amplicons)
+#   HAPLOTYPES — Tim's workbook parsed to JSON (MHCI/MHCII haplotype slots)
+MHCREF = REFS / "ARS-UCD2.0_chr23_MHC_renamed.fa"
+BLAST_NUC = REFS / "blast_db" / "BoLA_nuc"
+BLAST_GEN = REFS / "blast_db" / "BoLA_gen"
+HAPLOTYPES = REFS / "haplotypes.json"
+
+# Class I compute knobs. Class I is multi-copy + medaka-heavy, so cap the reads
+# fed to consensus (deep barcodes choke medaka) and bound its thread use.
+CLASSI_READ_CAP = int(_env("MHC_CLASSI_READ_CAP", "25000"))
+CLASSI_MEDAKA_THREADS = int(_env("MHC_MEDAKA_THREADS", "8"))
+
 
 def tool_env() -> dict:
     """os.environ with the ONT + phase env bins prepended to PATH, so bioconda

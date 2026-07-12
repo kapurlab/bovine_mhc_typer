@@ -73,11 +73,48 @@ def run_drb3(entries, outdir, threads):
     return str(out)
 
 
+CLASSI_HEADER = ("barcode\tsample\tontarget_reads\tqc\ttag\thap\treads\t"
+                 "status\tallele\tpident\tnote")
+
+
 def run_classI(amp, entries, outdir, threads):
-    # Placeholder until #3 wires classI_typed_pipeline -> reconcile -> haplotype.
-    print(f"[classI:{amp}] {len(entries)} samples — Class I typing is not yet wired "
-          f"(provisional). Skipped for now.", flush=True)
-    return None
+    """Type one Class-I amplicon's barcodes. PROVISIONAL — leads, not genotypes.
+
+    Runs bin/classI_type.py per barcode (each: filter -> on-target -> cluster ->
+    medaka backbone -> diploid split -> BLAST tier) and collects the TSV rows it
+    prints. Class I is medaka-heavy, so outer parallelism is throttled (each
+    barcode already uses ~8 inner threads).
+    """
+    ci_run = Path(outdir) / f"classI_{amp}_run"
+    ci_run.mkdir(parents=True, exist_ok=True)
+    out = Path(outdir) / f"classI_{amp}_typed.tsv"
+
+    def one(bc, sample, reads):
+        r = subprocess.run(
+            [sys.executable, str(HERE / "classI_type.py"), bc, sample, reads, amp, str(ci_run)],
+            text=True, capture_output=True,
+        )
+        rows = [l for l in (r.stdout or "").splitlines() if l.strip()]
+        if not rows:  # crashed before emitting anything
+            err = (r.stderr or "").strip().splitlines()
+            note = err[-1][:150] if err else "no output"
+            rows = [f"{bc}\t{sample}\t0\t\t\t\t0\tERROR\t\t0\t{note}"]
+        return rows
+
+    workers = max(1, threads // 4)  # each barcode uses ~8 inner threads (medaka/minimap)
+    print(f"[classI:{amp}] typing {len(entries)} barcodes (workers={workers}) — PROVISIONAL", flush=True)
+    rows = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(one, bc, s, reads): bc for bc, s, reads, _amp in entries}
+        for fut in concurrent.futures.as_completed(futs):
+            rr = fut.result()
+            rows.extend(rr)
+            print(f"  done {futs[fut]} ({len(rr)} rows)", flush=True)
+    rows.sort()
+    out.write_text(CLASSI_HEADER + "\n" + "\n".join(rows) + "\n")
+    conf = sum(1 for r in rows if r.split("\t")[7:8] == ["CONFIRMED"])
+    print(f"[classI:{amp}] wrote {out.name} — {len(rows)} rows, {conf} CONFIRMED (provisional)", flush=True)
+    return str(out)
 
 
 def main():
@@ -117,6 +154,19 @@ def main():
             manifest["outputs"][f"classI_{amp}"] = run_classI(amp, group, a.outdir, a.threads)
         else:
             print(f"[skip] unknown amplicon '{amp}' ({len(group)} samples)", flush=True)
+
+    # cross-amplicon reconciliation -> per-animal Class I calls + MHCI haplotypes
+    if any(amp in CLASS_I for amp in by_amp):
+        print("--- reconcile: cross-amplicon per-animal Class I ---", flush=True)
+        r = subprocess.run([sys.executable, str(HERE / "reconcile.py"), a.outdir],
+                           text=True, capture_output=True)
+        print(r.stdout, end="", flush=True)
+        pa = Path(a.outdir) / "per_animal_reconciled.tsv"
+        if r.returncode == 0 and pa.exists():
+            manifest["outputs"]["per_animal_reconciled"] = str(pa)
+            manifest["outputs"]["reconciled_alleles"] = str(Path(a.outdir) / "reconciled_alleles.tsv")
+        else:
+            print(f"[reconcile] failed: {(r.stderr or '').strip()[:200]}", flush=True)
 
     (Path(a.outdir) / "run_manifest.json").write_text(json.dumps(manifest, indent=2))
     print("=== done ===", flush=True)
