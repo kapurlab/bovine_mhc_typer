@@ -19,8 +19,10 @@ ONT_BIN = _env("MHC_ONT_BIN", "/home/vxk1/miniforge3/envs/ont_mhc/bin")
 PHASE_BIN = _env("MHC_PHASE_BIN", "/home/vxk1/miniforge3/envs/mhc_phase/bin")
 
 # BoLA reference bundle (blast_db/BoLA_{nuc,gen}, the ARS-UCD2.0 chr23 contig,
-# haplotypes.json).
-REFS = Path(_env("MHC_REFS", "/home/vxk1/BoLA_MHC/refs"))
+# haplotypes.json). Defaults to the bundle committed in the repo (../refs), so
+# the tool is self-contained; MHC_REFS overrides it (e.g. a shared/staged copy).
+_REPO_REFS = Path(__file__).resolve().parent.parent / "refs"
+REFS = Path(_env("MHC_REFS", str(_REPO_REFS)))
 
 # medaka consensus model — MUST match the basecaller (R10.4.1 SUP).
 MEDAKA_MODEL = _env("MHC_MEDAKA_MODEL", "r1041_e82_400bps_sup_v5.2.0")
