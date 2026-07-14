@@ -30,10 +30,13 @@ def _first_existing(*paths: str) -> str:
 
 
 # BoLA reference bundle (IPD-MHC BLAST DBs, ARS-UCD2.0 chr23 MHC contig,
-# haplotypes.json). Prefer the shared install location; fall back to the
-# original hand-built refs under the source project during bring-up.
+# haplotypes.json). Prefer a shared install location; then the refs bundled in
+# this repo (refs/, the self-contained default); then the original hand-built
+# refs under the source project during bring-up.
+_REPO_REFS = Path(__file__).resolve().parents[2] / "refs"
 _BOLA_REFS_DEFAULT = _first_existing(
     "/srv/kapurlab/databases/bola",
+    str(_REPO_REFS),
     "/home/vxk1/BoLA_MHC/refs",
 )
 
