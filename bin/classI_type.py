@@ -34,8 +34,6 @@ import shlex
 import subprocess
 from pathlib import Path
 
-import pysam
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mhc_config as C
 
@@ -218,17 +216,32 @@ def ontarget(filt, wd, cap):
     ot = f"{wd}/ontarget.fa"
     sh(f"minimap2 -ax map-ont --secondary=no -t {MAP_T} {q(MHCREF)} {q(filt)} 2>/dev/null "
        f"| samtools sort -o {q(bam)} - && samtools index {q(bam)}")
-    af = pysam.AlignmentFile(bam, "rb")
+    # Keep primary, mapped, non-supplementary alignments only (exclude
+    # 0x4 unmapped | 0x100 secondary | 0x800 supplementary). We read them via
+    # `samtools view` rather than pysam: field 10 (SEQ) is the read as stored in
+    # the BAM — i.e. already in reference/forward orientation for reverse-strand
+    # reads — which is exactly what pysam's query_sequence returned, so the
+    # downstream plus-strand vsearch clustering is unchanged. This drops the
+    # pysam dependency (pysam pins its own htslib and clashes with the env's
+    # samtools under conda); the env now ships samtools only.
+    proc = subprocess.Popen(["samtools", "view", "-F", "0x904", bam],
+                            stdout=subprocess.PIPE, text=True)
     total = written = 0
     with open(ot, "w") as fh:
-        for a in af.fetch():
-            if a.is_secondary or a.is_supplementary or a.is_unmapped or not a.query_sequence:
+        for line in proc.stdout:
+            fields = line.rstrip("\n").split("\t", 10)
+            if len(fields) < 10:
+                continue
+            name, seq = fields[0], fields[9]
+            if not seq or seq == "*":
                 continue
             total += 1
             if not cap or written < cap:
-                fh.write(f">{a.query_name}\n{a.query_sequence}\n")
+                fh.write(f">{name}\n{seq}\n")
                 written += 1
-    af.close()
+    proc.stdout.close()
+    if proc.wait() != 0:
+        raise RuntimeError(f"samtools view failed on {bam}")
     return ot, total
 
 

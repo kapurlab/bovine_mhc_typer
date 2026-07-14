@@ -19,7 +19,7 @@ WGS server. It's the 9th tool in the kapurlab `bdtools` family (sibling of
 |---|---|
 | **DRB3 (Class II)** | Production-ready — validated, 23/24 clean genotypes |
 | **Inputs** | Import (OneDrive) · Link · Upload; per-run sample sheets (view/download/override) |
-| **Class I pipeline** | Wired + validated **byte-for-byte** vs research (`classI_type.py` + `reconcile.py`); **gated off** in config pending a pysam-capable env + SUP data |
+| **Class I pipeline** | Wired + validated **byte-for-byte** vs research (`classI_type.py` + `reconcile.py`); **gated off** in config pending the ONT/phase env + SUP data |
 | **Results** | vSNP-style pass/review/fail QC table; tabbed per-animal view is next |
 | **Deploy** | Live on wgs3 (`/srv/kapurlab/tools/mhc_gui`); OOD card `id: mhc` |
 
@@ -71,9 +71,12 @@ PYTHONPATH=backend /srv/kapurlab/tools/mhc_gui/env/bin/python -m uvicorn app.mai
   `/rnode/<host>/<port>/…`; any hardcoded host/port 404s under the proxy.
 - **Log streaming is POLLING** (`/api/jobs/{id}/logtext`), **not SSE** — the OOD Apache
   proxy breaks SSE.
-- **Class I needs `pysam`** (imported by `classI_type.py`). The deployed app currently
-  **borrows `amr_plus_gui/env`**, which lacks it — so `enable_class_i` is **off**. The
-  dedicated env (`conda_setup/`) must add pysam + the ONT/phase tools before enabling.
+- **Class I needs the ONT/phase toolchain** (`minimap2`, `samtools`, `medaka`,
+  `spoa`, `nanoq`, `vsearch`, `bcftools`) — read via CLI, no `pysam` (dropped so the
+  env stays `samtools`-only; pysam pins its own htslib and clashes with the env's
+  samtools under conda). The deployed app currently **borrows `amr_plus_gui/env`**,
+  which lacks those tools — so `enable_class_i` is **off**. The dedicated env
+  (`conda_setup/`) must add the ONT/phase tools before enabling.
 - Pipeline tools resolve via `mhc_config` env-bin paths (`ont_mhc`, `mhc_phase`) —
   every shell path is `shlex.quote`d (run/sample names contain spaces & brackets).
 

@@ -46,7 +46,7 @@ def main():
         print(f"{bc}\t{sample}\t0\t\t\tMISSING")
         return
     sh(f"nanoq -i {q(wd)}/m.fq.gz -q 10 -l 400 --max-len 850 -o {q(wd)}/f.fq.gz 2>/dev/null")
-    sh(f"zcat {q(wd)}/f.fq.gz 2>/dev/null | head -40000 | "
+    sh(f"gzip -dc {q(wd)}/f.fq.gz 2>/dev/null | head -40000 | "
        f"awk 'NR%4==1{{print \">\"substr($1,2)}} NR%4==2{{print}}' > {q(wd)}/reads.fa")
     reads_fa = os.path.join(wd, "reads.fa")
     n = sum(1 for l in open(reads_fa) if l.startswith(">")) if os.path.exists(reads_fa) else 0
