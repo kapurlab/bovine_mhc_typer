@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
-_REPO_ROOT = _HERE.parent.parent          # /srv/kapurlab/tools/amr_plus_gui
+_REPO_ROOT = _HERE.parent.parent          # /srv/kapurlab/tools/mhc_gui
 _BIN_DIR = _REPO_ROOT / "bin"
 _CONFIG_DIR = _REPO_ROOT / "config"
 _FRONTEND_DIST = _REPO_ROOT / "frontend" / "dist"
