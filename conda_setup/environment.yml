@@ -1,38 +1,45 @@
-# Environment for the AMRFinderPlus GUI.
-# Install (shared) with:
-#   conda env create -p /srv/kapurlab/tools/amr_plus_gui/env -f conda_setup/environment.yml
-# or (personal) with:
-#   conda env create -f conda_setup/environment.yml   # -> env name amr_plus
+# Environment for the Bovine MHC Typer GUI (mhc_gui).
 #
-# After the env exists, run deploy/install.sh to download the AMRFinderPlus DB
-# (amrfinder -u), ensure the Kraken2 PlusPF DB, and build the frontend.
-name: amr_plus
+# Install (shared) with:
+#   mamba env create -p /srv/kapurlab/tools/mhc_gui/env -f conda_setup/environment.yml
+# or (personal) with:
+#   mamba env create -f conda_setup/environment.yml      # -> env name mhc_gui
+#
+# After the env exists, run deploy/install.sh to pip-install the backend and build
+# the React frontend. The BoLA reference bundle ships in-repo (../refs), so no
+# database download is needed.
+#
+# This is the tool's OWN env (like every other bdtools tool) — it does NOT borrow
+# amr_plus. It carries the full ONT amplicon typing toolchain plus the FastAPI
+# backend. bdtools builds it as osx-64 under Rosetta on Apple Silicon (native
+# arm64 bioconda builds are incomplete); Linux/OOD build native.
+name: mhc_gui
 channels:
   - conda-forge
   - bioconda
   - defaults
 
 dependencies:
-  # Core Python
+  # Core Python + report deps (backend also pip-installs backend/requirements.txt)
   - python=3.10
   - pip
   - numpy
   - pandas
-  - openpyxl
+  - openpyxl            # single-column stats workbook / sheet parsing
   - biopython
-  - matplotlib-base      # report figures
-  - reportlab            # PDF report (pure-Python; no headless browser)
-  - pillow               # image sizing in the PDF
+  - matplotlib-base     # report figures
+  - reportlab           # PDF report (pure-Python; no headless browser)
+  - pillow              # image sizing in the PDF
 
-  # AMR / organism-resolution toolchain
-  - ncbi-amrfinderplus   # AMRFinderPlus + StxTyper
-  - mlst                 # MLST corroboration (PubMLST schemes)
-  - kraken2              # organism detection from reads
-  - krakentools
-  - shovill              # preferred assembler
-  - spades               # assembler fallback (spades.py --isolate)
-  - seqkit               # assembly QC stats
-  - samtools
+  # ONT MHC amplicon typing toolchain (what bin/*.py shell out to)
+  - nanoq               # length/Q read filter
+  - minimap2            # on-target mapping (Class I)
+  - samtools            # BAM handling (samtools-only; NO pysam)
+  - bcftools            # diploid split / phasing (bcftools call --ploidy 2)
+  - vsearch             # cluster gene copies (Class I)
+  - spoa                # per-cluster draft consensus
+  - medaka              # consensus backbone (model r1041_e82_400bps_sup_v5.2.0)
+  - blast               # blastn vs the in-repo BoLA IPD-MHC DBs
 
   # Web backend (FastAPI serves the GUI under OOD)
   - fastapi>=0.115.0
@@ -46,6 +53,8 @@ dependencies:
       - pydantic>=2.0.0
 
 # Notes:
-#  - StxTyper ships inside ncbi-amrfinderplus (auto-run for Escherichia -n --plus).
-#  - The AMRFinderPlus database is NOT bundled; `amrfinder -u` downloads it to
-#    $CONDA_PREFIX/share/amrfinderplus/data/latest (see deploy/install.sh).
+#  - DRB3 (Class II) typing needs only nanoq + blastn + the in-repo BoLA_nuc DB and
+#    runs on every platform. Class I additionally uses minimap2/vsearch/spoa/medaka/
+#    bcftools; medaka assumes SUP basecalling (model pinned in bin/mhc_config.py).
+#  - The BoLA reference bundle is committed at ../refs (see refs/README.md); the
+#    pipeline resolves MHC_REFS to it by default.

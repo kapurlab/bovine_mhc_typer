@@ -71,12 +71,13 @@ PYTHONPATH=backend /srv/kapurlab/tools/mhc_gui/env/bin/python -m uvicorn app.mai
   `/rnode/<host>/<port>/…`; any hardcoded host/port 404s under the proxy.
 - **Log streaming is POLLING** (`/api/jobs/{id}/logtext`), **not SSE** — the OOD Apache
   proxy breaks SSE.
-- **Class I needs the ONT/phase toolchain** (`minimap2`, `samtools`, `medaka`,
-  `spoa`, `nanoq`, `vsearch`, `bcftools`) — read via CLI, no `pysam` (dropped so the
-  env stays `samtools`-only; pysam pins its own htslib and clashes with the env's
-  samtools under conda). The deployed app currently **borrows `amr_plus_gui/env`**,
-  which lacks those tools — so `enable_class_i` is **off**. The dedicated env
-  (`conda_setup/`) must add the ONT/phase tools before enabling.
+- **The tool has its OWN conda env** (`conda_setup/environment.yml`, name `mhc_gui`) —
+  it does not borrow amr_plus. The env carries the full ONT amplicon toolchain
+  (`nanoq`, `minimap2`, `samtools`, `bcftools`, `vsearch`, `spoa`, `medaka`, `blast`),
+  all read via CLI — no `pysam` (dropped: it pins its own htslib and clashes with the
+  env's samtools under conda). DRB3 (Class II) needs only nanoq + blastn + the BoLA_nuc
+  DB; Class I additionally uses minimap2/vsearch/spoa/medaka/bcftools. `enable_class_i`
+  is **off** by default (provisional calls), not for lack of tools.
 - Pipeline tools resolve via `mhc_config` env-bin paths (`ont_mhc`, `mhc_phase`) —
   every shell path is `shlex.quote`d (run/sample names contain spaces & brackets).
 

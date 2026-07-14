@@ -25,20 +25,19 @@ fi
 # Tool source (shared install only — no per-user fallback for the app itself)
 MHC_GUI=/srv/kapurlab/tools/mhc_gui
 
-# Add the conda env bin and the amr bin/ scripts to PATH
+# Put the tool's own env bin on PATH so the whole pipeline toolchain
+# (minimap2/samtools/bcftools/nanoq/vsearch/spoa/medaka/blastn) resolves from it.
 export PATH="${MHC_ENV}/bin:${PATH}"
-# amrfinder is built for bioconda and resolves its DB under
-# $CONDA_PREFIX/share/amrfinderplus/data/latest. Export CONDA_PREFIX so it (and
-# the pipeline subprocess uvicorn spawns) find the DB without the
-# "no CONDA_PREFIX" warning/fallback. Harmless when MHC_ENV is empty.
+# Export CONDA_PREFIX so bioconda tools locate their packaged share/ data
+# (e.g. medaka). Harmless when MHC_ENV is empty.
 [ -n "${MHC_ENV}" ] && export CONDA_PREFIX="${MHC_ENV}"
-# PYTHONPATH lets the amr bin/ scripts find each other (local imports in bin/)
+# PYTHONPATH lets the bin/ pipeline scripts find each other (local imports).
 export PYTHONPATH="${MHC_GUI}/bin:${PYTHONPATH}"
 
 cd "${MHC_GUI}/backend"
 echo "Starting uvicorn on port ${port}"
 echo "  conda env: ${MHC_ENV}"
-echo "  amr_gui:   ${MHC_GUI}"
+echo "  mhc_gui:   ${MHC_GUI}"
 exec $PYTHON -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port "${port}" \

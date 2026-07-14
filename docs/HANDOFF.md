@@ -18,9 +18,9 @@ next big piece.**
 | Shared runs library | `/srv/kapurlab/databases/mhc/runs/` (setgid, kapurlab-admins) |
 | OOD app | `/var/www/ood/apps/sys/mhc_gui` · launch card `id: mhc` in `/etc/ood/config/wgs_pipelines.yml` (status: available) |
 | Research pipeline (source of the science) | `/home/vxk1/BoLA_MHC/` — see its `HANDOVER.md` |
-| Conda env (uvicorn) | `mhc_gui/env` → **symlink to `amr_plus_gui/env`** (borrowed! no dedicated env yet) |
-| Pipeline tools | via config: `MHC_ONT_BIN=/home/vxk1/miniforge3/envs/ont_mhc/bin`, `MHC_PHASE_BIN=…/mhc_phase/bin` |
-| Refs | `/home/vxk1/BoLA_MHC/refs` (blast_db/BoLA_{nuc,gen}, chr23, haplotypes.json) |
+| Conda env (uvicorn) | `mhc_gui/env` — the tool's **own** dedicated env (`conda_setup/environment.yml`, name `mhc_gui`); full ONT toolchain, no longer borrows amr_plus |
+| Pipeline tools | resolve from the tool's own env by default (`mhc_config` uses the running env's bin); `MHC_ONT_BIN`/`MHC_PHASE_BIN` override for a legacy split env |
+| Refs | bundled in-repo at `refs/` (blast_db/BoLA_{nuc,gen}, chr23 contig, haplotypes.json); `MHC_REFS` overrides. See `refs/README.md` |
 
 **Deploy loop:** edit on Mac → `rsync backend/app + bin + frontend/src → wgs3` →
 `npm run build` (in frontend) → **start a fresh OOD session** (prod app doesn't

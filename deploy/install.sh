@@ -1,35 +1,33 @@
 #!/usr/bin/env bash
-# install.sh — idempotent, no-sudo deployment of the AMRFinderPlus GUI.
+# install.sh — idempotent, no-sudo deployment of the Bovine MHC Typer GUI.
 #
-# Mirrors the Kraken/vSNP sandbox pattern. Every heavy step is skippable and
-# clearly logged. Safe to re-run.
+# Mirrors the GenoFLU/Kraken/vSNP sandbox pattern. Every heavy step is skippable
+# and clearly logged. Safe to re-run. Portable across macOS (incl. Apple Silicon
+# under Rosetta), Linux, Windows (WSL2), and Open OnDemand: it takes no hard-coded
+# user paths and prefers a shared env at <repo>/env.
 #
 # What it does:
-#   1. Locate/create the conda env (shared at <repo>/env, else personal amr_plus).
+#   1. Locate/create the tool's OWN conda env (shared at <repo>/env, else the
+#      personal env `mhc_gui`) from conda_setup/environment.yml. This tool does
+#      NOT borrow amr_plus — it has its own env like every other bdtools tool.
 #   2. pip install backend/requirements.txt into that env.
-#   3. amrfinder -u  -> download the AMRFinderPlus DB (skip if present).
-#   4. Ensure a Kraken2 DB (PlusPF preferred; reuse existing if present).
-#   5. Ensure mlst / PubMLST data is reachable.
-#   6. Build the React frontend (frontend/dist/).
+#   3. Verify the MHC toolchain (nanoq, minimap2, samtools, bcftools, vsearch,
+#      spoa, medaka, blastn) and the in-repo BoLA reference bundle (refs/).
+#   4. Build the React frontend (frontend/dist/).
 #
 # Usage:
-#   deploy/install.sh [--personal] [--kraken-db DIR] [--skip-amrfinder-db]
-#                     [--skip-kraken-db] [--skip-frontend] [--dry-run]
+#   deploy/install.sh [--personal] [--conda-base DIR]
+#                     [--skip-verify] [--skip-frontend] [--dry-run]
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ---- defaults ----
 SHARED_ENV="${REPO_DIR}/env"
-PERSONAL_ENV_NAME="amr_plus"
+PERSONAL_ENV_NAME="mhc_gui"
 CONDA_BASE="${HOME}/miniforge3"
 USE_PERSONAL=0
-KRAKEN_DB_DIR=""
-KRAKEN_PLUSPF_DEFAULT="/srv/kapurlab/databases/kraken2/k2_standard_pluspf"
-KRAKEN_STD_FALLBACK="/srv/kapurlab/databases/kraken2/k2_standard_08gb"
-KRAKEN_PLUSPF_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_20240904.tar.gz"
-SKIP_AMRFINDER_DB=0
-SKIP_KRAKEN_DB=0
+SKIP_VERIFY=0
 SKIP_FRONTEND=0
 DRY_RUN=0
 
@@ -41,32 +39,29 @@ run()  { if [[ ${DRY_RUN} -eq 1 ]]; then echo "  [dry-run] $*"; else "$@"; fi; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --personal)           USE_PERSONAL=1; shift;;
-    --kraken-db)          KRAKEN_DB_DIR="$2"; shift 2;;
-    --conda-base)         CONDA_BASE="$2"; shift 2;;
-    --skip-amrfinder-db)  SKIP_AMRFINDER_DB=1; shift;;
-    --skip-kraken-db)     SKIP_KRAKEN_DB=1; shift;;
-    --skip-frontend)      SKIP_FRONTEND=1; shift;;
-    --dry-run)            DRY_RUN=1; shift;;
-    -h|--help)            sed -n '2,30p' "$0"; exit 0;;
+    --personal)       USE_PERSONAL=1; shift;;
+    --conda-base)     CONDA_BASE="$2"; shift 2;;
+    --skip-verify)    SKIP_VERIFY=1; shift;;
+    --skip-frontend)  SKIP_FRONTEND=1; shift;;
+    --dry-run)        DRY_RUN=1; shift;;
+    -h|--help)        sed -n '2,24p' "$0"; exit 0;;
     *) die "unknown arg: $1";;
   esac
 done
 
-log "AMRFinderPlus GUI install"
+log "Bovine MHC Typer GUI install"
 echo "  repo:  ${REPO_DIR}"
 [[ ${DRY_RUN} -eq 1 ]] && warn "DRY RUN — no changes will be made"
 
 # ---------------------------------------------------------------------------
-# 1. conda env
+# 1. conda env (the tool's own env)
 # ---------------------------------------------------------------------------
 CONDA="${CONDA_BASE}/bin/conda"
 [[ -x "${CONDA}" ]] || CONDA="$(command -v conda 2>/dev/null || true)"
 [[ -n "${CONDA}" && -x "${CONDA}" ]] || die "conda not found. Install miniforge to ${CONDA_BASE} or pass --conda-base."
 ok "conda: ${CONDA}"
-# Prefer mamba for env creation — clearer progress and a faster solve on big
-# bioconda envs. Falls back to conda (which on this box already uses the
-# libmamba solver). Override with CONDA_FRONTEND=conda.
+
+# Prefer mamba — conda's classic solver hangs on big bioconda envs.
 CONDA_FRONTEND="${CONDA_FRONTEND:-}"
 if [[ -z "${CONDA_FRONTEND}" ]]; then
   if [[ -x "${CONDA_BASE}/bin/mamba" ]]; then CONDA_FRONTEND="${CONDA_BASE}/bin/mamba"
@@ -77,13 +72,11 @@ ok "env builder: ${CONDA_FRONTEND}"
 
 ENV_FILE="${REPO_DIR}/conda_setup/environment.yml"
 if [[ ${USE_PERSONAL} -eq 1 ]]; then
-  ENV_REF=("-n" "${PERSONAL_ENV_NAME}")
   ENV_BIN="$("${CONDA}" run -n "${PERSONAL_ENV_NAME}" sh -c 'echo $CONDA_PREFIX/bin' 2>/dev/null || true)"
   ENV_DESC="personal env ${PERSONAL_ENV_NAME}"
   ENV_EXISTS=$("${CONDA}" env list | awk '{print $1}' | grep -qx "${PERSONAL_ENV_NAME}" && echo 1 || echo 0)
   CREATE_FLAG=("-n" "${PERSONAL_ENV_NAME}")
 else
-  ENV_REF=("-p" "${SHARED_ENV}")
   ENV_BIN="${SHARED_ENV}/bin"
   ENV_DESC="shared env ${SHARED_ENV}"
   ENV_EXISTS=$([[ -x "${SHARED_ENV}/bin/python" ]] && echo 1 || echo 0)
@@ -103,88 +96,53 @@ else
   run "${CONDA_FRONTEND}" env create "${CREATE_FLAG[@]}" -f "${ENV_FILE}"
 fi
 
+# A --personal env may have just been created above; if so, the ENV_BIN probed
+# earlier (via `conda run` before the env existed) is empty, which would make
+# PYTHON="/python". Re-resolve now that the env exists — prefer the live prefix,
+# fall back to <conda base>/envs/<name> (where `conda env create -n` puts it).
+if [[ ${USE_PERSONAL} -eq 1 && ! -x "${ENV_BIN}/python" ]]; then
+  ENV_BIN="$("${CONDA}" run -n "${PERSONAL_ENV_NAME}" sh -c 'echo $CONDA_PREFIX/bin' 2>/dev/null || true)"
+  [[ -x "${ENV_BIN}/python" ]] || ENV_BIN="$("${CONDA}" info --base 2>/dev/null)/envs/${PERSONAL_ENV_NAME}/bin"
+fi
+
 PYTHON="${ENV_BIN}/python"
-# Put the env's bin on PATH for every tool call below. amrfinder needs its
-# BLAST+/HMMER deps on PATH, and the `mlst` check is a Perl script whose
-# `#!/usr/bin/env perl` shebang must resolve to the env Perl (which carries
-# List::MoreUtils), not system Perl. The OOD session sets PATH the same way.
+[[ ${DRY_RUN} -eq 1 || -x "${PYTHON}" ]] || die "env python not found at '${PYTHON}' — ${ENV_DESC} did not build correctly."
+# Put the env's bin on PATH for every tool call below (and so the backend, which
+# runs under this env, finds the whole toolchain).
 if [[ -d "${ENV_BIN}" ]]; then export PATH="${ENV_BIN}:${PATH}"; fi
-# amrfinder is built for bioconda and resolves its DB under $CONDA_PREFIX/share/
-# amrfinderplus/data/latest. Without CONDA_PREFIX it warns and fails to find the
-# DB ("No valid AMRFinder database is found"), so `amrfinder -u` can't download
-# and runtime can't read it. Export it for the shared env (skip for --personal,
-# where the env name—not a fixed prefix—identifies it).
-if [[ ${USE_PERSONAL} -eq 0 ]]; then export CONDA_PREFIX="${SHARED_ENV}"; fi
+
 log "pip install backend requirements into ${ENV_DESC}"
 run "${PYTHON}" -m pip install -r "${REPO_DIR}/backend/requirements.txt"
 
 # ---------------------------------------------------------------------------
-# 2. AMRFinderPlus database
+# 2. Verify the MHC toolchain + in-repo reference bundle
 # ---------------------------------------------------------------------------
-if [[ ${SKIP_AMRFINDER_DB} -eq 1 ]]; then
-  warn "skipping AMRFinderPlus DB download (--skip-amrfinder-db)"
+if [[ ${SKIP_VERIFY} -eq 1 ]]; then
+  warn "skipping toolchain/refs verification (--skip-verify)"
 else
-  AMRFINDER="${ENV_BIN}/amrfinder"
-  # Install into the SHARED databases dir (matches config.py amrfinder_db default
-  # and the kraken2 DB convention) so it survives env rebuilds and is shared
-  # across hosts. Override with AMRFINDER_DB_DEST. amrfinder_update -d <parent>
-  # writes <parent>/<version>/ and a <parent>/latest symlink.
-  AMRFINDER_DB_DEST="${AMRFINDER_DB_DEST:-/srv/kapurlab/databases/amrfinderplus}"
-  if [[ ! -x "${AMRFINDER}" ]]; then
-    warn "amrfinder not found in env — DB step skipped (re-run after env build completes)"
-  elif [[ -f "${AMRFINDER_DB_DEST}/latest/version.txt" ]]; then
-    ok "AMRFinderPlus DB already present: ${AMRFINDER_DB_DEST}/latest"
-  elif mkdir -p "${AMRFINDER_DB_DEST}" 2>/dev/null && [[ -w "${AMRFINDER_DB_DEST}" ]]; then
-    log "downloading AMRFinderPlus DB into ${AMRFINDER_DB_DEST}"
-    run "${ENV_BIN}/amrfinder_update" -d "${AMRFINDER_DB_DEST}" \
-      || run "${AMRFINDER}" -u   # fall back to the env-default location
-    [[ -d "${AMRFINDER_DB_DEST}/latest" ]] && run du -sh "${AMRFINDER_DB_DEST}/latest" || true
-  else
-    warn "${AMRFINDER_DB_DEST} not writable — installing DB to the env default instead"
-    log "downloading AMRFinderPlus DB (amrfinder -u)"
-    run "${AMRFINDER}" -u
-  fi
-  log "AMRFinderPlus version + DB:"
-  run "${AMRFINDER}" -V -d "${AMRFINDER_DB_DEST}/latest" 2>/dev/null || run "${AMRFINDER}" -V || true
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Kraken2 database
-# ---------------------------------------------------------------------------
-if [[ ${SKIP_KRAKEN_DB} -eq 1 ]]; then
-  warn "skipping Kraken2 DB check (--skip-kraken-db)"
-else
-  if [[ -z "${KRAKEN_DB_DIR}" ]]; then
-    if [[ -d "${KRAKEN_PLUSPF_DEFAULT}" ]]; then
-      KRAKEN_DB_DIR="${KRAKEN_PLUSPF_DEFAULT}"
-    elif [[ -d "${KRAKEN_STD_FALLBACK}" ]]; then
-      KRAKEN_DB_DIR="${KRAKEN_STD_FALLBACK}"
+  # DRB3 (Class II) needs only nanoq + blastn + the BoLA_nuc DB and runs
+  # everywhere. The rest (minimap2/samtools/bcftools/vsearch/spoa/medaka) drive
+  # the provisional Class I path.
+  for t in nanoq blastn minimap2 samtools bcftools vsearch spoa medaka_consensus; do
+    if [[ -x "${ENV_BIN}/${t}" ]] || command -v "${t}" >/dev/null 2>&1; then
+      ok "${t} present"
+    else
+      warn "${t} not found in env — re-run after the env build completes."
     fi
-  fi
-  if [[ -n "${KRAKEN_DB_DIR}" && -f "${KRAKEN_DB_DIR}/hash.k2d" ]]; then
-    ok "Kraken2 DB present: ${KRAKEN_DB_DIR}"
+  done
+
+  # BoLA reference bundle ships in-repo (refs/); see refs/README.md.
+  REFS="${REPO_DIR}/refs"
+  if [[ -f "${REFS}/blast_db/BoLA_nuc.ndb" && -f "${REFS}/ARS-UCD2.0_chr23_MHC_renamed.fa" \
+        && -f "${REFS}/haplotypes.json" ]]; then
+    ok "BoLA reference bundle present: ${REFS} (BoLA_nuc/gen DBs, chr23 MHC contig, haplotypes.json)"
   else
-    warn "no Kraken2 DB found at ${KRAKEN_PLUSPF_DEFAULT} or ${KRAKEN_STD_FALLBACK}."
-    warn "To install PlusPF (large): "
-    echo "    mkdir -p ${KRAKEN_PLUSPF_DEFAULT}"
-    echo "    curl -L '${KRAKEN_PLUSPF_URL}' | tar -xz -C ${KRAKEN_PLUSPF_DEFAULT}"
-    warn "Organism detection from reads is skipped at runtime until a DB exists."
+    warn "BoLA reference bundle incomplete under ${REFS} — typing will fail until present."
   fi
 fi
 
 # ---------------------------------------------------------------------------
-# 4. mlst / PubMLST
-# ---------------------------------------------------------------------------
-if [[ -x "${ENV_BIN}/mlst" ]]; then
-  ok "mlst present: $("${ENV_BIN}/mlst" --version 2>&1 | head -1)"
-  "${ENV_BIN}/mlst" --list >/dev/null 2>&1 && ok "PubMLST schemes reachable" \
-    || warn "mlst installed but scheme list unavailable; check the bundled db."
-else
-  warn "mlst not in env — MLST corroboration will be skipped at runtime."
-fi
-
-# ---------------------------------------------------------------------------
-# 5. Frontend build
+# 3. Frontend build
 # ---------------------------------------------------------------------------
 if [[ ${SKIP_FRONTEND} -eq 1 ]]; then
   warn "skipping frontend build (--skip-frontend)"
@@ -197,7 +155,7 @@ else
   elif [[ -x node_modules/.bin/vite ]]; then
     run node_modules/.bin/vite build
   else
-    # Reuse the sibling Kraken GUI's node_modules if ours is missing.
+    # Reuse a sibling GUI's node_modules if ours is missing (no network / no npm).
     SIB="/srv/kapurlab/tools/kraken_id_parse_gui/frontend/node_modules"
     if [[ -d "${SIB}" && ! -e node_modules ]]; then
       run ln -s "${SIB}" node_modules
@@ -210,6 +168,6 @@ else
   [[ -f "${REPO_DIR}/frontend/dist/index.html" ]] && ok "frontend built: ${REPO_DIR}/frontend/dist/"
 fi
 
-log "Done. Register the OOD app (see deploy/INSTALL.md) and launch a session."
+log "Done. Register the OOD app (sudo deploy/register_ood_apps.sh) and launch a session."
 echo "  Backend entry:  ${REPO_DIR}/backend/app/main.py (uvicorn app.main:app)"
 echo "  Env python:     ${PYTHON}"

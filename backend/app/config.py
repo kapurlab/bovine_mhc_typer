@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -40,15 +41,20 @@ _BOLA_REFS_DEFAULT = _first_existing(
     "/home/vxk1/BoLA_MHC/refs",
 )
 
-# Conda env bin dirs. The pipeline needs ONT tools (minimap2, samtools, medaka,
-# spoa, nanoq) and the phasing tools (bcftools, vsearch, HAPCUT2). Prefer the
-# tool's own packaged env; fall back to the two source envs during bring-up.
+# Conda env bin dir. The whole pipeline toolchain (minimap2, samtools, bcftools,
+# nanoq, vsearch, spoa, medaka, blastn) lives in the tool's OWN dedicated env.
+# The backend runs under that env's python, so its bin dir is the correct default
+# on every platform (macOS/Windows-WSL2/Linux/OOD) — no hard-coded site path.
+# _first_existing keeps the shared-OOD and legacy two-env layouts as fallbacks.
+_ENV_BIN = str(Path(sys.executable).resolve().parent)
 _TOOL_ENV_BIN = "/srv/kapurlab/tools/mhc_gui/env/bin"
 _ONT_ENV_BIN_DEFAULT = _first_existing(
+    _ENV_BIN,
     _TOOL_ENV_BIN,
     "/home/vxk1/miniforge3/envs/ont_mhc/bin",
 )
 _PHASE_ENV_BIN_DEFAULT = _first_existing(
+    _ENV_BIN,
     _TOOL_ENV_BIN,
     "/home/vxk1/miniforge3/envs/mhc_phase/bin",
 )

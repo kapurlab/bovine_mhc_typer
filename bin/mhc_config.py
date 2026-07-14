@@ -5,6 +5,7 @@ The OOD launcher / FastAPI backend sets these from the per-user GUI config
 keep the scripts runnable standalone on wgs3 during bring-up.
 """
 import os
+import sys
 from pathlib import Path
 
 
@@ -12,11 +13,14 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, "").strip() or default
 
 
-# Conda env bin dirs. ONT tools (minimap2, samtools, medaka, spoa, nanoq) and
-# the phasing tools (bcftools, vsearch, HAPCUT2). One merged env sets both the
-# same; two envs set them differently.
-ONT_BIN = _env("MHC_ONT_BIN", "/home/vxk1/miniforge3/envs/ont_mhc/bin")
-PHASE_BIN = _env("MHC_PHASE_BIN", "/home/vxk1/miniforge3/envs/mhc_phase/bin")
+# Bin dir of the env we're running under (the tool's dedicated conda env, whose
+# python launched this script). All pipeline tools — minimap2, samtools, bcftools,
+# nanoq, vsearch, spoa, medaka, blastn — live in this single env, so it is the
+# right default on every platform (macOS/Windows-WSL2/Linux/OOD). The backend may
+# still override via MHC_ONT_BIN/MHC_PHASE_BIN (e.g. a legacy two-env layout).
+_ENV_BIN = str(Path(sys.executable).resolve().parent)
+ONT_BIN = _env("MHC_ONT_BIN", _ENV_BIN)
+PHASE_BIN = _env("MHC_PHASE_BIN", _ENV_BIN)
 
 # BoLA reference bundle (blast_db/BoLA_{nuc,gen}, the ARS-UCD2.0 chr23 contig,
 # haplotypes.json). Defaults to the bundle committed in the repo (../refs), so
@@ -27,8 +31,9 @@ REFS = Path(_env("MHC_REFS", str(_REPO_REFS)))
 # medaka consensus model — MUST match the basecaller (R10.4.1 SUP).
 MEDAKA_MODEL = _env("MHC_MEDAKA_MODEL", "r1041_e82_400bps_sup_v5.2.0")
 
-# BLAST binary (per handover: system blastn).
-BLASTN = _env("MHC_BLASTN", "/usr/bin/blastn")
+# BLAST binary — from the tool's own env (the `blast` conda package), so the tool
+# is self-contained. Override with MHC_BLASTN (e.g. a system blastn).
+BLASTN = _env("MHC_BLASTN", str(Path(_ENV_BIN) / "blastn"))
 
 # Class I reference files, derived from the REFS bundle:
 #   MHCREF     — clean chr23 MHC contig (NC_037350.1) for on-target mapping
