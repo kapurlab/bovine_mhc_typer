@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 import aiofiles
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1122,6 +1122,45 @@ def _run_sheet(run_dir: Path) -> Dict[str, Dict[str, str]]:
     return merged
 
 
+_RUN_SHEETS_DIR = "run_sheets"
+
+
+def _run_override(project_dir: Path, run_name: str) -> Dict[str, Dict[str, str]]:
+    """A per-run sheet override kept in the project (project/run_sheets/<run>.tsv), so a
+    linked (read-only) run can be given a sheet without touching the run folder. Highest
+    precedence — an explicit per-run choice wins over the run's own in-folder sheet."""
+    p = project_dir / _RUN_SHEETS_DIR / f"{run_name}.tsv"
+    if not p.is_file():
+        return {}
+    merged: Dict[str, Dict[str, str]] = {}
+    for barcodes in _parse_sheet(str(p), default_run=run_name).values():
+        for bc, meta in barcodes.items():
+            merged[bc.lower()] = meta
+    if merged:
+        merged["__sheet__"] = {"name": p.name}
+    return merged
+
+
+def _effective_sheet(project_dir: Path, run_dir: Path,
+                     project_sheet: Dict, site: Dict):
+    """Resolve the sheet a run actually uses, highest precedence first:
+    per-run override -> in-run sheet -> project sheet -> site map -> none.
+    Returns (rmap, source, name)."""
+    ov = _run_override(project_dir, run_dir.name)
+    if ov:
+        return ov, "override", ov.get("__sheet__", {}).get("name", "")
+    inrun = _run_sheet(run_dir)
+    if inrun:
+        return inrun, "in-run", inrun.get("__sheet__", {}).get("name", "")
+    ps = project_sheet.get(run_dir.name)
+    if ps:
+        return ps, "project", "sample_sheet.tsv"
+    st = site.get(run_dir.name)
+    if st:
+        return st, "site", "(site map)"
+    return {}, "none", ""
+
+
 def _annotate(rmap_raw: Dict[str, Dict[str, str]], names) -> List[Dict[str, str]]:
     """Attach sample/animal/tissue/amplicon to each barcode, matching
     case-insensitively (runs use Barcode01 or barcode01; sheets may differ)."""
@@ -1254,12 +1293,94 @@ async def api_project_sample_sheet(name: str, file: UploadFile = File(...)):
                          "barcodes": sum(len(v) for v in parsed.values())})
 
 
+def _linked_run_dir(project_dir: Path, run: str) -> Path:
+    """Resolve a linked run by name, rejecting traversal / unknown runs."""
+    if run in ("", ".", "..") or "/" in run or "\\" in run:
+        raise HTTPException(400, "Bad run name")
+    d = project_dir / "runs" / run
+    if not d.is_dir():
+        raise HTTPException(404, f"Run not linked: {run}")
+    return d
+
+
+def _run_barcode_names(run_dir: Path) -> List[str]:
+    try:
+        return sorted(p.name for p in run_dir.iterdir()
+                      if p.is_dir() and p.name.lower().startswith("barcode"))
+    except OSError:
+        return []
+
+
+@app.get("/api/projects/{name}/runs/{run}/sheet")
+def api_run_sheet(name: str, run: str):
+    """Preview the sheet a run actually uses — its effective source + resolved rows."""
+    cfg = load_config()
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    d = _linked_run_dir(project_dir, run)
+    rmap, source, sname = _effective_sheet(project_dir, d, _project_sheet(project_dir), _barcode_map(cfg))
+    rows = _annotate(rmap, _run_barcode_names(d))
+    return JSONResponse({"run": run, "source": source, "name": sname,
+                         "named": sum(1 for r in rows if r["sample"]), "rows": rows})
+
+
+@app.get("/api/projects/{name}/runs/{run}/sheet/download")
+def api_run_sheet_download(name: str, run: str):
+    """Download the effective sheet as TSV — exactly the mapping the pipeline will use
+    (works for any source: a real file, the site map, or bare barcode numbers)."""
+    cfg = load_config()
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    d = _linked_run_dir(project_dir, run)
+    rmap, _source, _name = _effective_sheet(project_dir, d, _project_sheet(project_dir), _barcode_map(cfg))
+    rows = _annotate(rmap, _run_barcode_names(d))
+    lines = ["run_folder\tamplicon\tbarcode\tsample_id\ttissue"]
+    lines += [f"{run}\t{r['amplicon']}\t{r['barcode']}\t{r['sample']}\t{r['tissue']}" for r in rows]
+    fname = re.sub(r"[^A-Za-z0-9._-]+", "_", run) + "_sample_sheet.tsv"
+    return Response("\n".join(lines) + "\n", media_type="text/tab-separated-values",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/api/projects/{name}/runs/{run}/sheet")
+async def api_run_sheet_upload(name: str, run: str, file: UploadFile = File(...)):
+    """Upload a per-run sheet override (stored in the project, not the run folder)."""
+    project_dir = _writable_project_dir(name)
+    _linked_run_dir(project_dir, run)
+    ov_dir = project_dir / _RUN_SHEETS_DIR
+    ov_dir.mkdir(parents=True, exist_ok=True)
+    dest = ov_dir / f"{run}.tsv"
+    async with aiofiles.open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            await out.write(chunk)
+    ov = _run_override(project_dir, run)
+    return JSONResponse({"saved": True, "source": "override",
+                         "barcodes": sum(1 for k in ov if k != "__sheet__")})
+
+
+@app.delete("/api/projects/{name}/runs/{run}/sheet")
+def api_run_sheet_clear(name: str, run: str):
+    """Remove a per-run override, falling back to in-run / project / site."""
+    project_dir = _writable_project_dir(name)
+    dest = project_dir / _RUN_SHEETS_DIR / f"{run}.tsv"
+    if dest.is_file():
+        dest.unlink()
+    return JSONResponse({"cleared": True})
+
+
 @app.get("/api/projects/{name}/inputs-status")
 def api_project_inputs_status(name: str):
     """What's loaded into a project: linked run folders + sample-sheet status."""
     project_dir = _get_project_dir(name)
     if project_dir is None:
         raise HTTPException(404, f"Project not found: {name}")
+    cfg = load_config()
+    project_sheet = _project_sheet(project_dir)
+    site = _barcode_map(cfg)
     runs_dir = project_dir / "runs"
     runs = []
     if runs_dir.is_dir():
@@ -1267,11 +1388,16 @@ def api_project_inputs_status(name: str):
             if not d.is_dir():
                 continue
             try:
-                nbc = sum(1 for p in d.iterdir() if p.is_dir() and p.name.lower().startswith("barcode"))
+                names = [p.name for p in d.iterdir()
+                         if p.is_dir() and p.name.lower().startswith("barcode")]
             except OSError:
-                nbc = 0
-            runs.append({"name": d.name, "barcodes": nbc})
-    parsed = _project_sheet(project_dir)
+                names = []
+            rmap, source, sname = _effective_sheet(project_dir, d, project_sheet, site)
+            ann = _annotate(rmap, names)
+            runs.append({"name": d.name, "barcodes": len(names),
+                         "sheet": {"source": source, "name": sname,
+                                   "named": sum(1 for b in ann if b["sample"])}})
+    parsed = project_sheet
     return JSONResponse({
         "runs": runs,
         "sheet": {"present": (project_dir / "sample_sheet.tsv").is_file(),
@@ -1303,8 +1429,11 @@ def api_project_runs(name: str):
                 continue
             if not names:
                 continue
-            barcodes = _annotate(_run_sheet(d) or sheet.get(d.name) or site.get(d.name) or {}, names)
-            out.append({"name": d.name, "path": str(d.resolve()), "barcodes": barcodes})
+            rmap, source, sname = _effective_sheet(project_dir, d, sheet, site)
+            barcodes = _annotate(rmap, names)
+            out.append({"name": d.name, "path": str(d.resolve()), "barcodes": barcodes,
+                        "sheet": {"source": source, "name": sname,
+                                  "named": sum(1 for b in barcodes if b["sample"])}})
 
     # Uploaded reads: each FASTQ in download/ is treated as one sample.
     dl = project_dir / "download"

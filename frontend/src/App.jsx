@@ -35,6 +35,7 @@ export default function App() {
   const [linkSel, setLinkSel] = useState("");
   const [seqTab, setSeqTab] = useState("link");
   const [exampleSheets, setExampleSheets] = useState([]);
+  const [sheetPreview, setSheetPreview] = useState(null);   // {run, source, name, rows}
   const [runPath, setRunPath] = useState("");
   const [barcodes, setBarcodes] = useState([]);
   const [selected, setSelected] = useState({});
@@ -185,6 +186,37 @@ export default function App() {
       const res = await fetch(`./api/projects/${encodeURIComponent(project)}/sample-sheet`, { method: "POST", body: fd });
       if (!res.ok) throw new Error((await res.json()).detail || res.status);
       loadProject(project);
+    } catch (e) { setError(String(e)); }
+  }
+
+  const runSheetUrl = (run, tail = "") =>
+    `./api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/sheet${tail}`;
+
+  async function viewRunSheet(run) {
+    if (sheetPreview?.run === run) { setSheetPreview(null); return; }  // toggle off
+    setError("");
+    try {
+      const s = await fetch(runSheetUrl(run)).then((x) => x.json());
+      setSheetPreview({ run, ...s });
+    } catch (e) { setError(String(e)); }
+  }
+
+  async function uploadRunOverride(run, file) {
+    if (!file || !project) return;
+    setError("");
+    const fd = new FormData(); fd.append("file", file);
+    try {
+      const res = await fetch(runSheetUrl(run), { method: "POST", body: fd });
+      if (!res.ok) throw new Error((await res.json()).detail || res.status);
+      setSheetPreview(null); loadProject(project);
+    } catch (e) { setError(String(e)); }
+  }
+
+  async function clearRunOverride(run) {
+    setError("");
+    try {
+      await fetch(runSheetUrl(run), { method: "DELETE" });
+      setSheetPreview(null); loadProject(project);
     } catch (e) { setError(String(e)); }
   }
 
@@ -348,20 +380,59 @@ export default function App() {
                       : <span className="muted">No runs linked yet.</span>}
                   </div>
 
-                  <label className="form-label" style={{ marginTop: 14 }}>Sample sheet <span className="muted">— barcode → sample → tissue → amplicon</span></label>
-                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <label className="file-label"><input type="file" accept=".tsv,.txt,.csv" style={{ display: "none" }} onChange={(e) => uploadSheet(e.target.files[0])} /><span className="ghost action">Upload sheet</span></label>
+                  <label className="form-label" style={{ marginTop: 14 }}>Sample sheets <span className="muted">— per run · barcode → sample → tissue → amplicon</span></label>
+                  {inputs?.runs?.length ? (
+                    <div className="sample-list" style={{ marginTop: 4 }}>
+                      {inputs.runs.map((r) => {
+                        const src = r.sheet?.source || "none";
+                        return (
+                          <div key={r.name} className="list-item" style={{ display: "block" }}>
+                            <div className="item-top" style={{ gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+                              <span className="list-title" style={{ flex: 1, minWidth: 160 }}>{r.name}</span>
+                              {src === "override" ? <span className="scope-badge scope-personal">override{r.sheet?.name ? ` · ${r.sheet.name}` : ""}</span>
+                                : src === "in-run" ? <span className="scope-badge scope-shared">in-run · {r.sheet?.name}</span>
+                                  : src === "project" ? <span className="scope-badge scope-shared">project sheet</span>
+                                    : src === "site" ? <span className="muted" style={{ fontSize: 12 }}>site map</span>
+                                      : <span className="muted" style={{ fontSize: 12 }}>barcode #s</span>}
+                              <span className="muted" style={{ fontSize: 12 }}>{r.sheet?.named || 0}/{r.barcodes} named</span>
+                            </div>
+                            <div className="row" style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                              <button className="ghost action" onClick={() => viewRunSheet(r.name)}>{sheetPreview?.run === r.name ? "Hide" : "View"}</button>
+                              <a className="ghost action" href={runSheetUrl(r.name, "/download")} style={{ textDecoration: "none" }}>Download</a>
+                              <label className="file-label"><input type="file" accept=".tsv,.txt,.csv" style={{ display: "none" }} onChange={(e) => uploadRunOverride(r.name, e.target.files[0])} /><span className="ghost action">Override…</span></label>
+                              {src === "override" && <button className="ghost action" onClick={() => clearRunOverride(r.name)}>Clear override</button>}
+                            </div>
+                            {sheetPreview?.run === r.name && (
+                              <div style={{ marginTop: 6, maxHeight: 200, overflowY: "auto", border: "1px solid var(--border,#ddd)", borderRadius: 6 }}>
+                                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                                  <thead><tr>{["barcode", "sample", "amplicon", "tissue"].map((h) => <th key={h} style={{ textAlign: "left", padding: "3px 8px", position: "sticky", top: 0, background: "var(--panel,#f7f7f7)" }}>{h}</th>)}</tr></thead>
+                                  <tbody>
+                                    {sheetPreview.rows.map((b) => (
+                                      <tr key={b.barcode}>
+                                        <td style={{ padding: "2px 8px" }}>{b.barcode}</td>
+                                        <td style={{ padding: "2px 8px" }}>{b.sample || <span className="muted">—</span>}</td>
+                                        <td style={{ padding: "2px 8px" }}>{b.amplicon || <span className="muted">—</span>}</td>
+                                        <td style={{ padding: "2px 8px" }}>{b.tissue || ""}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : <div className="note" style={{ marginTop: 4 }}><span className="muted">Link a run to view or set its sheet.</span></div>}
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                    <label className="file-label"><input type="file" accept=".tsv,.txt,.csv" style={{ display: "none" }} onChange={(e) => uploadSheet(e.target.files[0])} /><span className="ghost action">Upload project sheet</span></label>
                     <a className="ghost action" href="./api/example-sheets/TEMPLATE_sample_sheet.tsv" style={{ textDecoration: "none" }}>Template</a>
                     <select defaultValue="" onChange={(e) => { if (e.target.value) window.open(`./api/example-sheets/${encodeURIComponent(e.target.value)}`, "_blank"); e.target.value = ""; }}>
                       <option value="">Example sheets…</option>
                       {exampleSheets.filter((s) => !s.template).map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
                     </select>
                   </div>
-                  <div className="note" style={{ marginTop: 4 }}>
-                    {inputs?.sheet?.present
-                      ? <span className="scope-badge scope-shared">sheet loaded · {inputs.sheet.barcodes} barcodes</span>
-                      : <span className="muted">No sheet — falls back to the site map, then barcode numbers.</span>}
-                  </div>
+                  <p className="form-hint">Precedence per run: <b>override</b> → in-run sheet → project sheet → site map → barcode numbers. An override lives in the project — it never touches a linked run's folder. Download gives the exact mapping the pipeline will use.</p>
                 </>
               )}
             </div>
