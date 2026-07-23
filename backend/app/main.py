@@ -1,21 +1,10 @@
-"""
-AMRFinderPlus GUI — FastAPI backend.
+"""Bovine MHC Typer GUI — FastAPI backend.
 
-Serves the React SPA from frontend/dist/ and provides:
-  /api/projects        — list shared + personal projects (FASTQ browser)
-  /api/projects/{n}/samples — list FASTQ pairs in project/download/
-  /api/config          — get/set user config (DB paths)
-  /api/organism-options — valid AMRFinderPlus --organism tokens (cached)
-  /api/run             — start an amr_pipeline.py run
-  /api/jobs            — list running/completed jobs
-  /api/jobs/{id}       — job detail
-  /api/jobs/{id}/log   — SSE stream of the job log
-  /api/projects/{n}/samples/{s}/amr-results — per-sample result files
-  /api/projects/{n}/samples/{s}/amr-table   — parsed AMRFinderPlus TSV
-
-This backend is a sibling of vsnp_gui and kraken_id_parse_gui and shares their
-project layout. All URLs are served from / (uvicorn is behind the OOD rnode
-proxy — relative paths only).
+Serves the React SPA and APIs for run import/upload, barcode-to-animal mapping,
+DRB3 and provisional Class-I typing, result review/reporting, and background
+job status. Optional integrations can display AMRFinder results from related
+projects and import runs with rclone. All URLs remain relative for local and
+Open OnDemand proxy deployments.
 """
 
 import asyncio
@@ -31,13 +20,13 @@ from typing import Any, Dict, List, Optional
 
 import aiofiles
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import load_config, save_config
 from .jobs import JobManager
+from .request_safety import install_request_safety
 from .sra import (
     SRAExpansionError,
     build_download_script,
@@ -71,13 +60,8 @@ _ORGANISMS_FALLBACK = _CONFIG_DIR / "amrfinder_organisms.txt"
 # ---------------------------------------------------------------------------
 # App & job manager
 # ---------------------------------------------------------------------------
-app = FastAPI(title="AMRFinderPlus GUI")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Bovine MHC Typer GUI")
+install_request_safety(app)
 
 job_manager = JobManager(_JOBS_DIR)
 
