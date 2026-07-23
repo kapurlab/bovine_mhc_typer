@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import ThemeToggle from "./ThemeToggle";
 
 // MHC Typer (bola_gui) — bovine MHC (BoLA) genotyping from ONT amplicon reads.
 // Shares the Kapur Lab pipeline shell. Relative ./api/... URLs survive the OOD
@@ -275,16 +276,19 @@ export default function App() {
             <p>Bovine MHC (BoLA) genotyping from Oxford Nanopore amplicon reads</p>
           </div>
         </div>
-        <div className="status-pill"><span className="dot" data-state={jobStatus} /><span>{statusText}</span></div>
+        <div className="header-actions">
+          <ThemeToggle />
+          <div className="status-pill"><span className="dot" data-state={jobStatus} /><span>{statusText}</span></div>
+        </div>
       </header>
 
       <main className="layout">
         <section className="status-strip">
           <div className="status-item"><span className="status-label">Project</span><span className="status-value">{project || "—"}</span></div>
           <div className="status-item"><span className="status-label">Selected</span><span className="status-value">{chosen.length || "—"}</span></div>
-          <div className="status-item"><span className="status-label">Pass</span><span className="status-value" style={{ color: "#2f7d4f" }}>{table ? sum.pass : "—"}</span></div>
-          <div className="status-item"><span className="status-label">Review</span><span className="status-value" style={{ color: "#a9741f" }}>{table ? sum.review : "—"}</span></div>
-          <div className="status-item"><span className="status-label">Fail</span><span className="status-value" style={{ color: "#b04a29" }}>{table ? sum.fail : "—"}</span></div>
+          <div className="status-item"><span className="status-label">Pass</span><span className="status-value" style={{ color: "var(--success)" }}>{table ? sum.pass : "—"}</span></div>
+          <div className="status-item"><span className="status-label">Review</span><span className="status-value" style={{ color: "var(--warning)" }}>{table ? sum.review : "—"}</span></div>
+          <div className="status-item"><span className="status-label">Fail</span><span className="status-value" style={{ color: "var(--danger)" }}>{table ? sum.fail : "—"}</span></div>
           <div className="status-item"><span className="status-label">Job</span><span className="status-value cap">{jobStatus === "running" ? <><span className="pulse-dot" />running</> : statusText}</span></div>
         </section>
 
@@ -509,7 +513,7 @@ export default function App() {
           {table && table.rows?.length ? (
             <>
               <div className="note" style={{ marginBottom: 8 }}>
-                {sum.total} samples · <b style={{ color: "#2f7d4f" }}>{sum.pass} pass</b> · <b style={{ color: "#a9741f" }}>{sum.review} review</b> · <b style={{ color: "#b04a29" }}>{sum.fail} fail</b>
+                {sum.total} samples · <b style={{ color: "var(--success)" }}>{sum.pass} pass</b> · <b style={{ color: "var(--warning)" }}>{sum.review} review</b> · <b style={{ color: "var(--danger)" }}>{sum.fail} fail</b>
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table className="geno-table">
