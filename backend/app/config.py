@@ -23,10 +23,22 @@ _DEFAULT_SHARED_PROJECTS_ROOT = (
 
 def _first_existing(*paths: str) -> str:
     """Return the first path that exists, else the first candidate (so the
-    default is informative even on a fresh box)."""
+    default is informative even on a fresh box).
+
+    Several candidates below are legacy paths under another user's home. Path.exists()
+    RAISES PermissionError — rather than returning False — when an ancestor directory
+    is unreadable, and these calls run at import time. So on a shared server every
+    account except the original owner crashed on `import app.main`, and the tool
+    exited the instant the dashboard launched it. A path this account cannot stat
+    does not exist for our purposes; treat it as absent."""
     for p in paths:
-        if p and Path(p).exists():
-            return p
+        if not p:
+            continue
+        try:
+            if Path(p).exists():
+                return p
+        except OSError:
+            continue
     return paths[0] if paths else ""
 
 
