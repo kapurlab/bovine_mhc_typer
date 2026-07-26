@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import ThemeToggle from "./ThemeToggle";
+import ResultsPane from "./ResultsPane";
+import { useResults } from "./useResults";
 
 // MHC Typer (bola_gui) — bovine MHC (BoLA) genotyping from ONT amplicon reads.
 // Shares the Kapur Lab pipeline shell. Relative ./api/... URLs survive the OOD
@@ -24,10 +26,23 @@ const SETTING_FIELDS = [
   ["medaka_model", "medaka model", "Must match the basecaller (R10.4.1 SUP)."],
 ];
 
+// The tool-specific columns of the shared Results table. Everything else
+// about the pane is identical across the suite.
+const RESULT_COLUMNS = [
+  { key: "allele1", label: "DRB3 a1" },
+  { key: "allele2", label: "DRB3 a2" },
+  { key: "zygosity", label: "Zygosity" },
+  { key: "reads", label: "Reads", align: "right" },
+];
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [projects, setProjects] = useState([]);
   const [project, setProject] = useState("");
+  /* Every completed sample for the active project. Refreshed when a run
+     finishes rather than polled, matching the rest of the suite. */
+  const resultsPane = useResults(project);
+  const [showResultsPane, setShowResultsPane] = useState(true);
   const [newProject, setNewProject] = useState("");
   const [availableRuns, setAvailableRuns] = useState([]);   // runs_root (to link)
   const [onedriveRuns, setOnedriveRuns] = useState(null);   // OneDrive inbox (to import)
@@ -546,6 +561,36 @@ export default function App() {
             </>
           ) : <p className="empty-msg">Run typing to produce the per-sample DRB3 genotype table.</p>}
         </div>
+
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* SECTION: Results — every completed sample, not just the last  */}
+        {/* ════════════════════════════════════════════════════════ */}
+        <div className="row-header">
+          <h2>Results</h2>
+          <button className="ghost" onClick={() => setShowResultsPane(!showResultsPane)}>
+            {showResultsPane ? "Hide" : "Show"}
+          </button>
+        </div>
+        {showResultsPane && (
+          <div className="row-grid row-grid-split">
+            {/* LEFT — run status. This tool reports progress in the
+                 Pipeline Log below; the table on the right is the record. */}
+            <section className="panel">
+              <div className="panel-header"><h2>Current Run</h2></div>
+              <div className="empty-msg">
+                Progress appears in the Pipeline Log. Completed samples are listed
+                in the Results table to the right.
+              </div>
+            </section>
+            {/* RIGHT — every completed sample, searchable (vSNP Step 1 model) */}
+            <ResultsPane
+              project={project}
+              results={resultsPane}
+              columns={RESULT_COLUMNS}
+              labels={{ entity: "sample", sampleHeader: "Sample" }}
+            />
+          </div>
+        )}
 
         {/* Pipeline Log */}
         <div className="row-header"><h2>Pipeline Log</h2></div>
