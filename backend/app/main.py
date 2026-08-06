@@ -1595,6 +1595,51 @@ def api_job_table(job_id: str):
     return JSONResponse({"rows": rows, "summary": summary})
 
 
+@app.get("/api/jobs/{job_id}/classI")
+def api_job_classI(job_id: str):
+    """Per-animal Class I calls (reconciled) + tier summary. PROVISIONAL — the short
+    amplicons don't reproduce, so these are leads, not genotypes; 'confident' = exact
+    100% IPD match, and the amber gate stays in the UI."""
+    job = job_manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    cwd = Path(job.get("cwd", ""))
+    pa = cwd / "per_animal_reconciled.tsv"
+    if not pa.is_file():
+        return JSONResponse({"per_animal": [], "tiers": {}, "amplicons": []})
+
+    per_animal = []
+    for line in pa.read_text(encoding="utf-8").splitlines()[1:]:
+        f = line.split("\t")
+        if len(f) < 5:
+            continue
+        sample, alleles, n_conf, hap, drb3 = f[0], f[1], f[2], f[3], f[4]
+        per_animal.append({
+            "sample": sample,
+            "alleles": [a for a in alleles.split(";") if a and a != "-"],
+            "n_conf": int(n_conf) if n_conf.isdigit() else 0,
+            "haplotype": hap,
+            "drb3": drb3,
+        })
+    per_animal.sort(key=lambda r: r["sample"])
+
+    # tier summary + which amplicons were typed, from classI_<amp>_typed.tsv
+    tiers: Dict[str, int] = {}
+    amplicons = []
+    for tsv in sorted(cwd.glob("classI_*_typed.tsv")):
+        m = re.match(r"classI_(\w+)_typed\.tsv$", tsv.name)
+        if m:
+            amplicons.append(m.group(1))
+        for line in tsv.read_text(encoding="utf-8").splitlines()[1:]:
+            f = line.split("\t")
+            if len(f) > 7 and f[7]:
+                tiers[f[7]] = tiers.get(f[7], 0) + 1
+    n_called = sum(1 for r in per_animal if r["n_conf"] > 0)
+    return JSONResponse({"per_animal": per_animal, "tiers": tiers,
+                         "amplicons": amplicons, "n_called": n_called,
+                         "provisional": True})
+
+
 @app.get("/api/jobs")
 def api_list_jobs():
     return JSONResponse(job_manager.list_jobs())

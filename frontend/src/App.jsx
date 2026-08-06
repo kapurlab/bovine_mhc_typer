@@ -44,6 +44,7 @@ export default function App() {
   const [job, setJob] = useState(null);
   const [log, setLog] = useState("");
   const [table, setTable] = useState(null);
+  const [classI, setClassI] = useState(null);
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -82,7 +83,7 @@ export default function App() {
         fetch(`./api/projects/${encodeURIComponent(name)}/inputs-status`).then((x) => x.json()),
       ]);
       setProjectRuns(runs || []); setInputs(st);
-      setRunPath(""); setBarcodes([]); setSelected({}); setTable(null); setResults([]);
+      setRunPath(""); setBarcodes([]); setSelected({}); setTable(null); setClassI(null); setResults([]);
     } catch (e) { setError(String(e)); }
   }
 
@@ -92,7 +93,7 @@ export default function App() {
     const bcs = raw.map((b) => (typeof b === "string" ? { barcode: b, sample: "", tissue: "", amplicon: "" } : b));
     setBarcodes(bcs);
     setSelected(Object.fromEntries(bcs.map((b) => [b.barcode, true])));
-    setTable(null); setResults([]);
+    setTable(null); setClassI(null); setResults([]);
   }
 
   async function createProject() {
@@ -253,11 +254,12 @@ export default function App() {
         setLog(r.log || ""); setJob({ id, status: r.status });
         if (r.status === "succeeded" || r.status === "failed") {
           clearInterval(pollRef.current); setBusy(false);
-          const [t, res] = await Promise.all([
+          const [t, res, ci] = await Promise.all([
             fetch(`./api/jobs/${id}/table`).then((x) => x.json()).catch(() => null),
             fetch(`./api/jobs/${id}/results`).then((x) => x.json()).catch(() => []),
+            fetch(`./api/jobs/${id}/classI`).then((x) => x.json()).catch(() => null),
           ]);
-          setTable(t); setResults(res.files || res || []);
+          setTable(t); setResults(res.files || res || []); setClassI(ci);
         }
       } catch (_) { /* keep polling */ }
     }, 1500);
@@ -506,10 +508,11 @@ export default function App() {
         {/* 4 · Genotypes */}
         <div className="row-header"><h2>4 · Genotypes</h2></div>
         <div className="panel">
+          {/* DRB3 (Class II) genotypes */}
           {table && table.rows?.length ? (
             <>
               <div className="note" style={{ marginBottom: 8 }}>
-                {sum.total} samples · <b style={{ color: "#2f7d4f" }}>{sum.pass} pass</b> · <b style={{ color: "#a9741f" }}>{sum.review} review</b> · <b style={{ color: "#b04a29" }}>{sum.fail} fail</b>
+                <b>DRB3 (Class II)</b> — {sum.total} samples · <b style={{ color: "#2f7d4f" }}>{sum.pass} pass</b> · <b style={{ color: "#a9741f" }}>{sum.review} review</b> · <b style={{ color: "#b04a29" }}>{sum.fail} fail</b>
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table className="geno-table">
@@ -529,18 +532,50 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              {results.length > 0 && (
-                <ul className="results-list" style={{ marginTop: 10 }}>
-                  {results.map((f) => (
-                    <li className="results-item" key={f.name}>
-                      <span className="result-icon">{f.name.endsWith(".html") ? "📄" : f.name.endsWith(".tsv") ? "▦" : "•"}</span>
-                      <a className="result-name result-link" href={`./api/jobs/${job.id}/file?path=${encodeURIComponent(f.name)}${f.openable ? "&inline=1" : ""}`} target={f.openable ? "_blank" : undefined} rel="noreferrer">{f.label || f.name}</a>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </>
-          ) : <p className="empty-msg">Run typing to produce the per-sample DRB3 genotype table.</p>}
+          ) : null}
+
+          {/* Class I per-animal calls — PROVISIONAL */}
+          {classI && classI.per_animal?.length ? (
+            <div style={{ marginTop: table && table.rows?.length ? 18 : 0 }}>
+              <div style={{ marginBottom: 8, padding: "7px 11px", background: "#fdf4e7", border: "1px solid #e6c893", borderRadius: 6, color: "#8a5a12", fontSize: 13 }}>
+                ⚠ <b>Class I</b>{classI.amplicons?.length ? ` (${classI.amplicons.join(" + ")})` : ""} — <b>PROVISIONAL</b>: leads, not genotypes. “Confident” = exact 100% IPD match; {classI.n_called || 0}/{classI.per_animal.length} animals with ≥1.
+                {classI.tiers && Object.keys(classI.tiers).length ? <span className="muted"> · tiers: {Object.entries(classI.tiers).map(([k, v]) => `${v} ${k}`).join(" · ")}</span> : null}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table className="geno-table">
+                  <thead><tr><th>Animal</th><th>Confident Class I alleles (100% IPD)</th><th>#</th><th>MHCI haplotype</th><th>DRB3</th></tr></thead>
+                  <tbody>
+                    {classI.per_animal.map((r) => (
+                      <tr key={r.sample}>
+                        <td><b>{r.sample}</b></td>
+                        <td>{r.alleles.length ? r.alleles.map((a, i) => <span key={i} className="qc-badge qc-pass" style={{ marginRight: 4, marginBottom: 2, display: "inline-block" }}>{a}</span>) : <span className="muted">—</span>}</td>
+                        <td>{r.n_conf ? <b>{r.n_conf}</b> : <span className="muted">0</span>}</td>
+                        <td className={r.haplotype && r.haplotype !== "(insufficient)" ? "" : "muted"}>{r.haplotype}</td>
+                        <td className="muted">{r.drb3 && r.drb3 !== "-" ? r.drb3 : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Download / result files (always shown when a run produced output) */}
+          {results.length > 0 && (
+            <ul className="results-list" style={{ marginTop: 12 }}>
+              {results.map((f) => (
+                <li className="results-item" key={f.name}>
+                  <span className="result-icon">{f.name.endsWith(".html") ? "📄" : f.name.endsWith(".tsv") ? "▦" : "•"}</span>
+                  <a className="result-name result-link" href={`./api/jobs/${job.id}/file?path=${encodeURIComponent(f.name)}${f.openable ? "&inline=1" : ""}`} target={f.openable ? "_blank" : undefined} rel="noreferrer">{f.label || f.name}</a>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {!(table && table.rows?.length) && !(classI && classI.per_animal?.length) && results.length === 0 && (
+            <p className="empty-msg">Run typing to produce the genotype tables.</p>
+          )}
         </div>
 
         {/* Pipeline Log */}
