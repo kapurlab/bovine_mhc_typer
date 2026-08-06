@@ -225,7 +225,7 @@ def ontarget(filt, wd, cap):
     # pysam dependency (pysam pins its own htslib and clashes with the env's
     # samtools under conda); the env now ships samtools only.
     proc = subprocess.Popen(["samtools", "view", "-F", "0x904", bam],
-                            stdout=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, text=True, env=C.tool_env())
     total = written = 0
     with open(ot, "w") as fh:
         for line in proc.stdout:
