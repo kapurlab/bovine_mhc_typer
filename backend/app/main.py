@@ -1640,6 +1640,42 @@ def api_job_classI(job_id: str):
                          "provisional": True})
 
 
+@app.get("/api/projects/{name}/runs/{run}/last-job")
+def api_run_last_job(name: str, run: str):
+    """Latest typing job for a linked run's output dir, so the UI can re-load a
+    finished run's results (Genotypes / Class I / downloads) on selection — no
+    re-run. Scans persisted job state, so it survives session restarts (where the
+    in-memory job list is empty)."""
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    if "/" in run or run in ("", ".", ".."):
+        raise HTTPException(400, "Bad run name")
+    try:
+        target = (project_dir / "mhc" / run).resolve()
+    except OSError:
+        return JSONResponse({"job_id": None})
+    best = None
+    for sf in job_manager.jobs_dir.glob("*.json"):
+        try:
+            j = json.loads(sf.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        c = j.get("cwd")
+        if not c:
+            continue
+        try:
+            if Path(c).resolve() != target:
+                continue
+        except OSError:
+            continue
+        if best is None or (j.get("started_at", "") > best.get("started_at", "")):
+            best = j
+    if best is None:
+        return JSONResponse({"job_id": None})
+    return JSONResponse({"job_id": best.get("id"), "status": best.get("status")})
+
+
 @app.get("/api/jobs")
 def api_list_jobs():
     return JSONResponse(job_manager.list_jobs())

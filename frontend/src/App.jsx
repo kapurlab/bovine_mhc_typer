@@ -89,11 +89,28 @@ export default function App() {
 
   function pickRun(path) {
     setRunPath(path);
-    const raw = projectRuns.find((x) => x.path === path)?.barcodes || [];
-    const bcs = raw.map((b) => (typeof b === "string" ? { barcode: b, sample: "", tissue: "", amplicon: "" } : b));
+    const r = projectRuns.find((x) => x.path === path);
+    const bcs = (r?.barcodes || []).map((b) => (typeof b === "string" ? { barcode: b, sample: "", tissue: "", amplicon: "" } : b));
     setBarcodes(bcs);
     setSelected(Object.fromEntries(bcs.map((b) => [b.barcode, true])));
-    setTable(null); setClassI(null); setResults([]);
+    setTable(null); setClassI(null); setResults([]); setJob(null);
+    if (r?.name) loadRunResults(r.name);
+  }
+
+  // Re-load a finished run's results (Genotypes / Class I / downloads) on selection,
+  // without re-running — finds the run's most recent typing job.
+  async function loadRunResults(runName) {
+    try {
+      const lj = await fetch(`./api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runName)}/last-job`).then((x) => x.json());
+      if (!lj?.job_id) return;
+      setJob({ id: lj.job_id, status: lj.status || "succeeded" });
+      const [t, res, ci] = await Promise.all([
+        fetch(`./api/jobs/${lj.job_id}/table`).then((x) => x.json()).catch(() => null),
+        fetch(`./api/jobs/${lj.job_id}/results`).then((x) => x.json()).catch(() => []),
+        fetch(`./api/jobs/${lj.job_id}/classI`).then((x) => x.json()).catch(() => null),
+      ]);
+      setTable(t); setResults(res.files || res || []); setClassI(ci);
+    } catch (_) { /* no prior results for this run */ }
   }
 
   async function createProject() {
