@@ -12,7 +12,7 @@ import { useResults } from "./useResults";
 // Fallback ONLY: the header shows the backend-reported version (git
 // describe — the same string the Diagnostic Tools Dashboard shows) and
 // uses this constant just until that arrives / on installs without git.
-const APP_VERSION = "0.2.3";
+const APP_VERSION = "0.2.4";
 
 const AMPLICONS = [
   { id: "drb3", label: "DRB3 (Class II) — reliable", classI: false },
