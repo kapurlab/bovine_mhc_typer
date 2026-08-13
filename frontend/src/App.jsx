@@ -9,7 +9,10 @@ import { useResults } from "./useResults";
 // Shares the Kapur Lab pipeline shell. Relative ./api/... URLs survive the OOD
 // proxy; the job log is POLLED via /logtext (SSE is unreliable through Apache).
 
-const APP_VERSION = "0.1.0";
+// Fallback ONLY: the header shows the backend-reported version (git
+// describe — the same string the Diagnostic Tools Dashboard shows) and
+// uses this constant just until that arrives / on installs without git.
+const APP_VERSION = "0.2.3";
 
 const AMPLICONS = [
   { id: "drb3", label: "DRB3 (Class II) — reliable", classI: false },
@@ -288,7 +291,7 @@ export default function App() {
         <div className="app-brand">
           <img className="app-logo" src="./mhc_icon.svg" alt="BoLA MHC DNA icon" />
           <div>
-            <h1>MHC Typer <span className="version-tag">v{APP_VERSION}</span></h1>
+            <h1>MHC Typer <span className="version-tag">{config?.app_version || `v${APP_VERSION}`}</span></h1>
             <p>Bovine MHC (BoLA) genotyping from Oxford Nanopore amplicon reads</p>
           </div>
         </div>
