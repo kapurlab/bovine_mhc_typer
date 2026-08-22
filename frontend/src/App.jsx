@@ -4,6 +4,7 @@ import ThemeToggle from "./ThemeToggle";
 import CitationFooter from "./Citations";
 import ResultsPane from "./ResultsPane";
 import { useResults } from "./useResults";
+import CopyLogButton from "./CopyLogButton";
 
 // MHC Typer (bola_gui) — bovine MHC (BoLA) genotyping from ONT amplicon reads.
 // Shares the Kapur Lab pipeline shell. Relative ./api/... URLs survive the OOD
@@ -597,7 +598,7 @@ export default function App() {
         )}
 
         {/* Pipeline Log */}
-        <div className="row-header"><h2>Pipeline Log</h2></div>
+        <div className="row-header"><h2>Pipeline Log</h2><CopyLogButton text={() => log} /></div>
         <div className="panel">
           <div className="log-meta"><span className="dot" data-state={jobStatus} /> {statusText}{job ? ` · ${job.id.slice(0, 8)}` : ""}</div>
           <pre className="log" ref={logRef}>{log || <span className="log-placeholder">Select a run and click Run to start.</span>}</pre>
