@@ -3,8 +3,10 @@ import "./App.css";
 import ThemeToggle from "./ThemeToggle";
 import CitationFooter from "./Citations";
 import ResultsPane from "./ResultsPane";
+import { ResizableTable, Grip } from "./ResizableTable";
 import { useResults } from "./useResults";
 import CopyLogButton from "./CopyLogButton";
+import { PaneSplitters } from "./SplitPane";
 
 // MHC Typer (bola_gui) — bovine MHC (BoLA) genotyping from ONT amplicon reads.
 // Shares the Kapur Lab pipeline shell. Relative ./api/... URLs survive the OOD
@@ -288,6 +290,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Draggable dividers for every two-pane row on the page (see
+          SplitPane.jsx). One element, no per-row wiring. */}
+      <PaneSplitters />
       <header className="app-header">
         <div className="app-brand">
           <img className="app-logo" src="./mhc_icon.svg" alt="BoLA MHC DNA icon" />
@@ -428,8 +433,8 @@ export default function App() {
                             </div>
                             {sheetPreview?.run === r.name && (
                               <div style={{ marginTop: 6, maxHeight: 200, overflowY: "auto", border: "1px solid var(--border,#ddd)", borderRadius: 6 }}>
-                                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                                  <thead><tr>{["barcode", "sample", "amplicon", "tissue"].map((h) => <th key={h} style={{ textAlign: "left", padding: "3px 8px", position: "sticky", top: 0, background: "var(--panel,#f7f7f7)" }}>{h}</th>)}</tr></thead>
+                                <ResizableTable id="mhc.run-sheet" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                                  <thead><tr>{["barcode", "sample", "amplicon", "tissue"].map((h) => <th key={h} style={{ textAlign: "left", padding: "3px 8px", position: "sticky", top: 0, background: "var(--panel,#f7f7f7)" }}><span className="rt-th-label">{h}</span><Grip label={h} /></th>)}</tr></thead>
                                   <tbody>
                                     {sheetPreview.rows.map((b) => (
                                       <tr key={b.barcode}>
@@ -440,7 +445,7 @@ export default function App() {
                                       </tr>
                                     ))}
                                   </tbody>
-                                </table>
+                                </ResizableTable>
                               </div>
                             )}
                           </div>
@@ -536,8 +541,8 @@ export default function App() {
                 {sum.total} samples · <b style={{ color: "var(--success)" }}>{sum.pass} pass</b> · <b style={{ color: "var(--warning)" }}>{sum.review} review</b> · <b style={{ color: "var(--danger)" }}>{sum.fail} fail</b>
               </div>
               <div style={{ overflowX: "auto" }}>
-                <table className="geno-table">
-                  <thead><tr><th>Sample</th><th>Barcode</th><th>DRB3 allele 1</th><th>DRB3 allele 2</th><th>Zyg.</th><th>Reads a1/a2</th><th>QC</th></tr></thead>
+                <ResizableTable id="mhc.genotypes" className="geno-table">
+                  <thead><tr><th><span className="rt-th-label">Sample</span><Grip label="Sample" /></th><th><span className="rt-th-label">Barcode</span><Grip label="Barcode" /></th><th><span className="rt-th-label">DRB3 allele 1</span><Grip label="DRB3 allele 1" /></th><th><span className="rt-th-label">DRB3 allele 2</span><Grip label="DRB3 allele 2" /></th><th><span className="rt-th-label">Zyg.</span><Grip label="Zyg." /></th><th><span className="rt-th-label">Reads a1/a2</span><Grip label="Reads a1/a2" /></th><th><span className="rt-th-label">QC</span><Grip label="QC" /></th></tr></thead>
                   <tbody>
                     {table.rows.map((r) => (
                       <tr key={r.barcode}>
@@ -551,7 +556,7 @@ export default function App() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </ResizableTable>
               </div>
               {results.length > 0 && (
                 <ul className="results-list" style={{ marginTop: 10 }}>
