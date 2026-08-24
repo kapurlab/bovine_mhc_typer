@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .config import load_config, save_config
+from .config import load_config, save_config, shared_projects_root
 from .jobs import JobManager
 from .request_safety import install_request_safety
 from .sra import (
@@ -47,7 +47,14 @@ _CONFIG_DIR = _REPO_ROOT / "config"
 _FRONTEND_DIST = _REPO_ROOT / "frontend" / "dist"
 
 # Shared project root
-_SHARED_PROJECTS = Path("/srv/kapurlab/projects")
+# Shared projects root: resolved per call via config.shared_projects_root() —
+# BDTOOLS_SHARED_PROJECTS_ROOT, then the user's Settings value, then none. It
+# used to be a module constant naming one lab server's path, which had two
+# consequences everywhere else: the shared scope pointed at a directory that
+# could not exist, and changing shared_projects_root in Settings moved nothing,
+# because nothing read it. Returns None when this deployment has no shared root
+# (the normal case on a laptop), so every use below has to say what it does
+# then — which is the point.
 
 # Jobs log directory (inside repo so it survives across sessions)
 _JOBS_DIR = _REPO_ROOT / "backend" / "jobs"
@@ -146,7 +153,9 @@ def _get_project_dir(name: str) -> Optional[Path]:
     if "/" in name or name.startswith("."):
         return None
     cfg = load_config()
-    for root in [_SHARED_PROJECTS, Path(cfg.get("projects_root", ""))]:
+    for root in [shared_projects_root(), Path(cfg.get("projects_root", ""))]:
+        if root is None or not str(root).strip():
+            continue
         candidate = root / name
         if candidate.is_dir():
             return candidate
@@ -199,7 +208,11 @@ def _create_project(name: str, scope: str) -> Path:
     name = _normalize_project_name(name)
     cfg = load_config()
     if scope == _SCOPE_SHARED:
-        root = _SHARED_PROJECTS
+        root = shared_projects_root()
+        if root is None:
+            raise ValueError(
+                "This deployment has no shared projects root. Set one in Settings "
+                "(shared_projects_root) or create the project under your own root.")
     else:
         root = Path(cfg.get("projects_root", "") or (Path.home() / "projects"))
     try:
@@ -303,9 +316,11 @@ def _list_fastq_pairs(download_dir: Path) -> List[Dict]:
 @app.get("/api/projects")
 def api_list_projects():
     cfg = load_config()
-    projects = _list_projects_from_root(_SHARED_PROJECTS, _SCOPE_SHARED)
+    shared_root = shared_projects_root()
+    projects = (_list_projects_from_root(shared_root, _SCOPE_SHARED)
+                if shared_root is not None else [])
     personal_root = Path(cfg.get("projects_root", ""))
-    if personal_root != _SHARED_PROJECTS:
+    if personal_root != shared_root:
         personal = _list_projects_from_root(personal_root, _SCOPE_PERSONAL)
         seen = {p["name"] for p in projects}
         projects += [p for p in personal if p["name"] not in seen]
